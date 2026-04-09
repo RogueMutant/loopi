@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Loopi Design Tokens ──────────────────────────────────────────────────── */
+
+:root {
+  --background: #050D09;
+  --foreground: #E8F4FF;
+  --font-space-grotesk: 'Space Grotesk', sans-serif;
+  --font-ibm-plex-mono: 'IBM Plex Mono', monospace;
+}
+
+html {
+  background: #050D09;
+}
+
+body {
+  color: #E8F4FF;
+  background: #050D09;
+}
+
+/* ─── Select dropdown options (dark) ───────────────────────────────────────── */
+
+select option {
+  background: #0D1117;
+  color: #C9D1D9;
+}
+
+/* ─── Scrollbar (dark theme) ───────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #050D09;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #21262D;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #30363D;
+}
+
+/* ─── Green flash animation (realtime new campaign) ────────────────────────── */
+
+@keyframes flash-green {
+  0% {
+    background-color: rgba(0, 210, 130, 0.12);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.animate-flash {
+  animation: flash-green 1.5s ease-out;
+}
+
+/* ─── Focus ring ───────────────────────────────────────────────────────────── */
+
+*:focus-visible {
+  outline: 2px solid #00D282;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ─── Landing page: Score ring draw animation ──────────────────────────────── */
+
+@keyframes ring-draw {
+  from {
+    stroke-dasharray: 0 999;
+  }
+}
+
+.landing-ring-animate {
+  animation: ring-draw 1.5s ease-out forwards;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
