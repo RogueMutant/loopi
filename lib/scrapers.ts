@@ -43,7 +43,10 @@ async function getBrowser(): Promise<{ browser: Browser; isRemote: boolean }> {
   return { browser, isRemote: false };
 }
 
-async function closeBrowser(browser: Browser, isRemote: boolean): Promise<void> {
+async function closeBrowser(
+  browser: Browser,
+  isRemote: boolean,
+): Promise<void> {
   // Both local and remote use the same close() — Browserless cleans up the session
   await browser.close();
 }
@@ -83,7 +86,7 @@ async function safeText(page: Page, selector: string): Promise<string> {
 function blockAssets(context: Awaited<ReturnType<Browser["newContext"]>>) {
   return context.route(
     "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,otf}",
-    (route) => route.abort()
+    (route) => route.abort(),
   );
 }
 
@@ -108,80 +111,244 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
       timeout: 30000,
     });
 
-    await page.waitForSelector(
-      '[class*="bounty"], [class*="campaign"], [class*="card"]',
-      { timeout: 15000 }
-    );
+    // What the debugger revealed:
+    // Each bounty card is wrapped in <a class="block h-full" href="/bounty/[slug]">
+    // The "View Details" button is a SEPARATE <a class="block w-full text-center...">
+    // WizzHQ uses Tailwind — no semantic class names like "bounty-card" exist.
+    //
+    // Card internal structure (inferred from screenshot + concatenated text):
+    //   <a class="block h-full" href="/bounty/slug">
+    //     <div>  ← card wrapper with colored left border
+    //       <img />  ← protocol logo
+    //       <div>
+    //         <h2 or b or strong>PRED: Trade the Game</h2>  ← title
+    //         <span or a>Pred</span>                        ← protocol (colored)
+    //       </div>
+    //       <div>
+    //         <span>Bounty</span><span>Content</span>       ← type tags
+    //       </div>
+    //       <p>description text...</p>
+    //       <div>
+    //         <span>35 Submissions</span>                   ← entries (contains "Submissions")
+    //         <span>6 days left</span>                      ← deadline (contains "left" or "Review")
+    //       </div>
+    //     </div>
+    //   </a>
+
+    // Wait for at least one bounty card link to appear
+    await page.waitForSelector('a[href*="/bounty/"].block', { timeout: 15000 });
 
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(2000);
 
-    const cards = await page.$$eval(
-      '[class*="bounty-card"], [class*="BountyCard"], [class*="campaign-card"]',
-      (els) =>
-        els.map((el) => ({
-          title:
-            el.querySelector('[class*="title"], h2, h3')?.textContent?.trim() ?? "",
-          protocol:
-            el
-              .querySelector('[class*="sponsor"], [class*="protocol"], [class*="company"]')
-              ?.textContent?.trim() ?? "",
-          reward:
-            el
-              .querySelector('[class*="reward"], [class*="prize"], [class*="amount"]')
-              ?.textContent?.trim() ?? "",
-          deadline:
-            el
-              .querySelector('[class*="deadline"], [class*="end"], [class*="time"]')
-              ?.textContent?.trim() ?? "",
-          entries:
-            el
-              .querySelector(
-                '[class*="submission"], [class*="entry"], [class*="participant"]'
-              )
-              ?.textContent?.trim() ?? "0",
-          href:
-            (el.closest("a") ?? el.querySelector("a"))?.getAttribute("href") ?? "",
-        }))
+    // Select the card wrapper links — "block h-full" anchors, NOT "View Details" buttons
+    // Filter: href must contain "/bounty/", class must contain "h-full" (card wrappers)
+    // "View Details" buttons have "w-full text-center" — they won't match "h-full"
+    const cards = await page.$$eval('a[href*="/bounty/"]', (els) =>
+      els
+        .filter((el) => el.className.includes("h-full"))
+        .map((el) => {
+          const href = el.getAttribute("href") ?? "";
+
+          // Title: first h2, h3, b, or strong — the bolded campaign name
+          const titleEl =
+            el.querySelector("h2, h3, b, strong") ??
+            el.querySelector("[class*='font-bold'], [class*='font-semibold']");
+          const title = titleEl?.textContent?.trim() ?? "";
+
+          // Protocol: the element immediately after the title that is NOT a heading.
+          // On WizzHQ this is a colored anchor or span (e.g. "Pred" in purple).
+          // Strategy: get all direct text nodes / spans after the logo area.
+          // The protocol name appears as the second distinct text block in the header.
+          const allTextNodes = Array.from(
+            el.querySelectorAll("a, span, p"),
+          ).map((n) => n.textContent?.trim() ?? "");
+          // Protocol is typically a short colored word right after the title
+          const protocol =
+            allTextNodes.find(
+              (t) =>
+                t.length > 0 &&
+                t.length < 40 &&
+                t !== title &&
+                !t.includes("Submission") &&
+                !t.includes("left") &&
+                !t.includes("Review") &&
+                !t.includes("Bounty") &&
+                !t.includes("Content") &&
+                !t.includes("Create") &&
+                !t.includes("View"),
+            ) ?? "";
+
+          // Entries: span/div containing "Submissions" or "submissions"
+          const entriesEl = Array.from(
+            el.querySelectorAll("span, div, p"),
+          ).find(
+            (n) =>
+              n.textContent?.toLowerCase().includes("submission") ||
+              n.textContent?.toLowerCase().includes("participant"),
+          );
+          const entries = entriesEl?.textContent?.trim() ?? "0";
+
+          // Deadline: span/div containing "left", "days", "hours", or "Review"
+          const deadlineEl = Array.from(
+            el.querySelectorAll("span, div, p"),
+          ).find(
+            (n) =>
+              n.textContent?.toLowerCase().includes(" left") ||
+              n.textContent?.toLowerCase().includes("days") ||
+              n.textContent?.toLowerCase().includes("hours") ||
+              n.textContent?.toLowerCase().includes("in review"),
+          );
+          const deadline = deadlineEl?.textContent?.trim() ?? "";
+
+          // WizzHQ reward is NOT on the card — it's only on the detail page.
+          // We set 0 here and fetch it from the detail page below.
+          return { title, protocol, entries, deadline, href, reward: "" };
+        })
+        .filter((c) => c.title.length > 0),
     );
 
     for (const card of cards) {
       if (!card.title) continue;
 
+      // Card hrefs are /bounty/[slug] — NOT /bounties/[slug]
+      // Running debugSelectors on /bounties/slug returns empty HTML (wrong URL)
       const sourceUrl = card.href.startsWith("http")
         ? card.href
         : `https://wizzhq.xyz${card.href}`;
 
       let description = "";
-      if (card.href) {
-        try {
-          const detailPage = await context.newPage();
-          await detailPage.goto(sourceUrl, {
-            waitUntil: "domcontentloaded",
-            timeout: 20000,
-          });
-          description = await safeText(
-            detailPage,
-            '[class*="description"], [class*="content"], [class*="brief"], article'
+      let rewardToken = "USDC";
+      let rewardUsd = 0;
+      let campaignStatus: "active" | "in_review" | "ended" = "active";
+      let winnerCount = 0;
+      let prizeDistribution: Array<{ place: number; amount: number }> = [];
+      let skillsRequired: string[] = [];
+
+      try {
+        const detailPage = await context.newPage();
+        await detailPage.goto(sourceUrl, {
+          waitUntil: "networkidle",
+          timeout: 25000,
+        });
+
+        // ── Description ──────────────────────────────────────────────────────
+        // Debug row 7 confirmed: sections use Tailwind class "bg-card"
+        // First bg-card section = Short Description. Strip the heading text.
+        const descRaw = await safeText(
+          detailPage,
+          ".bg-card p, [class*='bg-card'] p",
+        );
+        description = descRaw
+          .replace(/^Short Description\s*/i, "")
+          .slice(0, 1000);
+        if (!description) {
+          const paras = await detailPage.$$eval("p", (els) =>
+            els
+              .map((el) => el.textContent?.trim() ?? "")
+              .filter((t) => t.length > 40),
           );
-          description = description.slice(0, 1000);
-          await detailPage.close();
-        } catch {
-          // detail failed — continue
+          description = paras[0]?.slice(0, 1000) ?? "";
         }
+
+        // ── Reward ───────────────────────────────────────────────────────────
+        // PDF shows: "Total Prize Pool" then "1000 USDC" as two separate elements.
+        // Scan full body text for this pattern.
+        const bodyText = await detailPage.$eval(
+          "body",
+          (b) => b.textContent ?? "",
+        );
+
+        const poolMatch = bodyText.match(
+          /Total Prize Pool[\s\S]{0,60}?([\d,]+(?:\.\d+)?)\s*(USDC|USDT|SOL|ETH|BNB|MATIC)/i,
+        );
+        if (poolMatch) {
+          rewardToken = poolMatch[2].toUpperCase();
+          rewardUsd = parseReward(poolMatch[1]);
+        } else {
+          const tokenMatch = bodyText.match(
+            /([\d,]+(?:\.\d+)?)\s*(USDC|USDT|SOL|ETH)/i,
+          );
+          if (tokenMatch) {
+            rewardToken = tokenMatch[2].toUpperCase();
+            rewardUsd = parseReward(tokenMatch[1]);
+          }
+        }
+
+        // ── Campaign status ───────────────────────────────────────────────────
+        // Listing card already gave us "In Review" hint via card.deadline
+        if (
+          card.deadline.toLowerCase().includes("in review") ||
+          bodyText.toLowerCase().includes("in review")
+        ) {
+          campaignStatus = "in_review";
+        } else if (
+          bodyText.toLowerCase().includes("ended") ||
+          bodyText.toLowerCase().includes("closed")
+        ) {
+          campaignStatus = "ended";
+        }
+
+        // ── Prize distribution ────────────────────────────────────────────────
+        // PDF: 1st→300, 2nd→200, 3rd-12th→50 each. Extract ordinal+amount pairs.
+        const prizeSection = bodyText.match(
+          /Prize Distribution([\s\S]{0,2000}?)(?:Short Description|Deliverables|Required Skills|Contact|$)/i,
+        );
+        if (prizeSection) {
+          const matches = [
+            ...prizeSection[1].matchAll(
+              /(\d+)(?:st|nd|rd|th)[^\d]*(\d[\d,]*(?:\.\d+)?)\s*(?:USDC|USDT|SOL|ETH)?/gi,
+            ),
+          ];
+          prizeDistribution = matches.map((m) => ({
+            place: parseInt(m[1]),
+            amount: parseReward(m[2]),
+          }));
+          winnerCount = prizeDistribution.length;
+        }
+
+        // ── Skills required ───────────────────────────────────────────────────
+        // PDF: "Required Skills → Content Creator"
+        const skillsMatch = bodyText.match(
+          /Required Skills?\s*\n?([\s\S]{0,200}?)(?:\n{2}|Contact|Deliverables|$)/i,
+        );
+        if (skillsMatch) {
+          skillsRequired = skillsMatch[1]
+            .split(/\n|,/)
+            .map((s) => s.trim())
+            .filter((s) => s.length > 2 && s.length < 50 && /[a-zA-Z]/.test(s));
+        }
+
+        await detailPage.close();
+      } catch (err) {
+        console.error(`[wizzhq] Detail fetch failed for ${sourceUrl}:`, err);
       }
+
+      const entryCount = parseInt(card.entries.replace(/\D/g, "")) || 0;
+      // True EV: average prize × (winners / entries)
+      const avgPrize =
+        winnerCount > 0
+          ? prizeDistribution.reduce((s, p) => s + p.amount, 0) / winnerCount
+          : rewardUsd;
 
       campaigns.push({
         title: card.title,
         protocol_name: card.protocol || "Unknown",
         type: "bounty",
-        reward_usd: parseReward(card.reward),
-        entry_count: parseInt(card.entries.replace(/\D/g, "")) || 0,
+        reward_usd: rewardUsd,
+        reward_token: rewardToken,
+        entry_count: entryCount,
         deadline: parseDeadline(card.deadline),
         source_url: sourceUrl,
         description,
         chain: "multi",
-      });
+        campaign_status: campaignStatus,
+        prize_distribution:
+          prizeDistribution.length > 0 ? prizeDistribution : undefined,
+        winner_count: winnerCount || undefined,
+        skills_required: skillsRequired,
+        avg_prize: avgPrize,
+      } as any);
     }
   } catch (err) {
     console.error("[wizzhq] Scrape failed:", err);
@@ -242,7 +409,7 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
           .filter((a) => a.closest("article, [class*='card'], [class*='item']"))
           .map((a) => {
             const card = a.closest(
-              "article, [class*='card'], [class*='item']"
+              "article, [class*='card'], [class*='item']",
             ) as Element;
             return {
               href: a.getAttribute("href") ?? "",
@@ -253,13 +420,13 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
               protocol:
                 card
                   .querySelector(
-                    "[class*='sponsor'], [class*='client'], [class*='brand']"
+                    "[class*='sponsor'], [class*='client'], [class*='brand']",
                   )
                   ?.textContent?.trim() ?? "",
               reward:
                 card
                   .querySelector(
-                    "[class*='reward'], [class*='prize'], [class*='budget']"
+                    "[class*='reward'], [class*='prize'], [class*='budget']",
                   )
                   ?.textContent?.trim() ?? "",
               deadline:
@@ -268,7 +435,7 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
                   ?.textContent?.trim() ?? "",
             };
           })
-          .filter((c) => c.title && c.href)
+          .filter((c) => c.title && c.href),
     );
 
     // Deduplicate by href
@@ -303,19 +470,19 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
 
             description = await safeText(
               detailPage,
-              "[class*='description'], [class*='brief'], [class*='overview'], main p"
+              "[class*='description'], [class*='brief'], [class*='overview'], main p",
             );
             description = description.slice(0, 1000);
 
             const entriesText = await safeText(
               detailPage,
-              "[class*='submission'], [class*='entries'], [class*='applicant']"
+              "[class*='submission'], [class*='entries'], [class*='applicant']",
             );
             entries = parseInt(entriesText.replace(/\D/g, "")) || 0;
 
             const deadlineText = await safeText(
               detailPage,
-              "[class*='deadline'], [class*='due-date'], time"
+              "[class*='deadline'], [class*='due-date'], time",
             );
             if (deadlineText) deadline = parseDeadline(deadlineText);
 
@@ -335,7 +502,7 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
             description,
             chain: "multi",
           };
-        })
+        }),
       );
 
       for (const result of results) {
@@ -387,7 +554,7 @@ export async function debugSelectors(url: string): Promise<void> {
         classes: el.className?.slice(0, 80),
         text: el.textContent?.slice(0, 80).trim().replace(/\s+/g, " "),
         href: (el as HTMLAnchorElement).href ?? null,
-      }))
+      })),
   );
 
   console.log("\n[debug] Candidate elements:");

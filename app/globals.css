@@ -5,26 +5,27 @@
 /* ─── Loopi Design Tokens ──────────────────────────────────────────────────── */
 
 :root {
-  --background: #050D09;
-  --foreground: #E8F4FF;
-  --font-space-grotesk: 'Space Grotesk', sans-serif;
-  --font-ibm-plex-mono: 'IBM Plex Mono', monospace;
+  --background: #050d09;
+  --foreground: #e8f4ff;
+  --font-space-grotesk: "Space Grotesk", sans-serif;
+  --font-ibm-plex-mono: "IBM Plex Mono", monospace;
 }
 
 html {
-  background: #050D09;
+  background: #050d09;
+  scroll-behavior: smooth;
 }
 
 body {
-  color: #E8F4FF;
-  background: #050D09;
+  color: #e8f4ff;
+  background: #050d09;
 }
 
 /* ─── Select dropdown options (dark) ───────────────────────────────────────── */
 
 select option {
-  background: #0D1117;
-  color: #C9D1D9;
+  background: #0d1117;
+  color: #c9d1d9;
 }
 
 /* ─── Scrollbar (dark theme) ───────────────────────────────────────────────── */
@@ -34,16 +35,16 @@ select option {
 }
 
 ::-webkit-scrollbar-track {
-  background: #050D09;
+  background: #050d09;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #21262D;
+  background: #21262d;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #30363D;
+  background: #30363d;
 }
 
 /* ─── Green flash animation (realtime new campaign) ────────────────────────── */
@@ -64,7 +65,7 @@ select option {
 /* ─── Focus ring ───────────────────────────────────────────────────────────── */
 
 *:focus-visible {
-  outline: 2px solid #00D282;
+  outline: 2px solid #00d282;
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -79,6 +80,84 @@ select option {
 
 .landing-ring-animate {
   animation: ring-draw 1.5s ease-out forwards;
+}
+
+/* ─── Digital Scan Effect ─────────────────────────────────────────────────── */
+
+@keyframes scan-x {
+  0% {
+    left: -5%;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    left: 105%;
+    opacity: 0;
+  }
+}
+
+@keyframes scan-y {
+  0% {
+    top: -5%;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    top: 105%;
+    opacity: 0;
+  }
+}
+
+@keyframes scan-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scaleX(1);
+  }
+  50% {
+    opacity: 0.2;
+    transform: scaleX(1.1);
+  }
+}
+
+@keyframes scan-pulse-y {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scaleY(1);
+  }
+  50% {
+    opacity: 0.2;
+    transform: scaleY(1.1);
+  }
+}
+
+.scan-line-x {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  background: linear-gradient(to bottom, transparent, #00d282, transparent);
+  filter: blur(0.5px);
+}
+
+.scan-line-y {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1.5px;
+  background: linear-gradient(to right, transparent, #00d282, transparent);
+  filter: blur(0.5px);
 }
 
 @layer utilities {

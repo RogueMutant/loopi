@@ -35,8 +35,8 @@ const config: Config = {
         },
       },
       animation: {
-        tick: "tick 28s linear infinite",
-        "tick-slow": "tick 35s linear infinite",
+        tick: "tick 80s linear infinite",
+        "tick-slow": "tick 110s linear infinite",
       },
     },
   },

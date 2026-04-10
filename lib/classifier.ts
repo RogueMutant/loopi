@@ -1,11 +1,11 @@
 /**
  * Loopi Effort Classifier
  * ───────────────────────
- * Calls the Claude API to classify campaign effort level
+ * Calls the Gemini API to classify campaign effort level
  * (Low / Medium / High) from the campaign title and description.
  *
  * This replaces the manual "Admin assigns effort" step.
- * Cost: ~0.001 USD per campaign at claude-haiku-4-5 pricing.
+ * Cost: Very low cost on Gemini 2.5 flash.
  * Speed: ~1s per campaign.
  *
  * Effort → Score mapping:
@@ -42,6 +42,8 @@ When uncertain between two levels, choose the lower effort level (bias toward LO
 Respond ONLY with valid JSON in this exact format — no other text:
 {"effort": "low"|"medium"|"high", "reasoning": "one sentence explanation"}`;
 
+import { GoogleGenAI, Type, Schema } from "@google/genai";
+
 export async function classifyEffort(
   title: string,
   description: string
@@ -56,29 +58,42 @@ Campaign description: ${truncatedDesc}
 Classify the effort level.`;
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY!,
-        "anthropic-version": "2023-06-01",
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    
+    const responseSchema: Schema = {
+      type: Type.OBJECT,
+      properties: {
+        effort: {
+          type: Type.STRING,
+          enum: ["low", "medium", "high"],
+          description: "The classified effort level."
+        },
+        reasoning: {
+          type: Type.STRING,
+          description: "One sentence explanation of the classification."
+        }
       },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001", // cheapest model — classification is simple
-        max_tokens: 150,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
+      required: ["effort", "reasoning"]
+    };
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: userMessage,
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+        temperature: 0.1, // Keep it deterministic
+      }
     });
 
-    if (!response.ok) {
-      console.error("[classifier] API error:", response.status);
-      return fallback();
+    if (!response.text) {
+        console.error("[classifier] Empty response from Gemini");
+        return fallback();
     }
 
-    const data = await response.json();
-    const text = data.content?.[0]?.text ?? "";
-
+    const text = response.text;
+    
     // Parse JSON response
     const parsed = JSON.parse(text.trim());
     const effort_label = parsed.effort as EffortLabel;

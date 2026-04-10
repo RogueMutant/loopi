@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import type { Metadata } from 'next';
+import { ConnectButton } from '@/components/ConnectButton';
+import { ArrowRight } from 'lucide-react';
 
 export const metadata: Metadata = {
   title: 'Loopi | The Ultimate Web3 Campaign & Bounty Platform',
@@ -17,8 +19,9 @@ const TICKER_ITEMS = [
   <div key="7">LOOPI SCORE ACCURACY <span className="text-accentGreen font-medium">91%</span></div>,
 ];
 
-// Duplicate items to ensure smooth infinite scrolling for 50% translation
-const RENDER_TICKER = [...TICKER_ITEMS, ...TICKER_ITEMS];
+// Duplicate items to ensure smooth infinite scrolling for 50% translation.
+// We need enough items to guarantee the track is at least 2x any reasonable screen width.
+const RENDER_TICKER = [...TICKER_ITEMS, ...TICKER_ITEMS, ...TICKER_ITEMS, ...TICKER_ITEMS, ...TICKER_ITEMS, ...TICKER_ITEMS];
 
 const LIVE_ITEMS = [
   { score: 92, scoreColor: "text-accentGreen", title: "Solana Mobile Chapter 2 Pre-order", proto: "SUPERTEAM · BOUNTY · $500" },
@@ -29,7 +32,7 @@ const LIVE_ITEMS = [
   { score: 31, scoreColor: "text-accentRed", title: "SENTIENT Community Campaign", proto: "SENTIENT · INFOFI · $800" },
 ];
 
-const RENDER_LIVE = [...LIVE_ITEMS, ...LIVE_ITEMS];
+const RENDER_LIVE = [...LIVE_ITEMS, ...LIVE_ITEMS, ...LIVE_ITEMS, ...LIVE_ITEMS, ...LIVE_ITEMS, ...LIVE_ITEMS];
 
 export default function Home() {
   return (
@@ -51,13 +54,11 @@ export default function Home() {
         <div className="font-mono text-lg font-medium text-accentGreen tracking-[-0.02em] mr-auto">Loopi_</div>
         <div className="hidden md:flex gap-7">
           <Link href="/feed" className="font-sans text-[13px] text-t3 no-underline tracking-[0.01em] hover:text-t1 transition-colors">Feed</Link>
-          <a href="#" className="font-sans text-[13px] text-t3 no-underline tracking-[0.01em] hover:text-t1 transition-colors">How it works</a>
+          <a href="#how-it-works" className="font-sans text-[13px] text-t3 no-underline tracking-[0.01em] hover:text-t1 transition-colors">How it works</a>
           <a href="#" className="font-sans text-[13px] text-t3 no-underline tracking-[0.01em] hover:text-t1 transition-colors">For protocols</a>
-          <a href="#" className="font-sans text-[13px] text-t3 no-underline tracking-[0.01em] hover:text-t1 transition-colors">Creators</a>
+          <a href="#creators" className="font-sans text-[13px] text-t3 no-underline tracking-[0.01em] hover:text-t1 transition-colors">Creators</a>
         </div>
-        <button className="font-mono text-xs font-medium text-background bg-accentGreen border-none px-[18px] py-[7px] rounded-md cursor-pointer tracking-[-0.01em] hover:bg-[#00e68f] transition-colors">
-          Connect wallet
-        </button>
+        <ConnectButton variant="nav" />
       </nav>
 
       {/* HERO */}
@@ -75,14 +76,12 @@ export default function Home() {
             Every Web3 campaign scored 0–100 by expected ROI, competition density, effort required, and founder trust — before you waste a single hour on it.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 items-center mb-12">
-            <Link href="/feed" className="w-full sm:w-auto">
-              <button className="w-full font-mono text-[13px] font-medium bg-accentGreen text-background border-none px-6 py-3 rounded-lg cursor-pointer tracking-[-0.01em] hover:bg-[#00e68f] transition-colors">
-                Open the feed →
+            <ConnectButton />
+            <a href="#how-it-works" className="w-full sm:w-auto">
+              <button className="w-full font-sans text-[13px] text-t2 bg-transparent border-[0.5px] border-border-strong px-5 py-3 rounded-lg cursor-pointer hover:bg-surface transition-colors">
+                See how it works
               </button>
-            </Link>
-            <button className="w-full sm:w-auto font-sans text-[13px] text-t2 bg-transparent border-[0.5px] border-border-strong px-5 py-3 rounded-lg cursor-pointer hover:bg-surface transition-colors">
-              See how it works
-            </button>
+            </a>
           </div>
           <div className="flex gap-8 pt-6 border-t-[0.5px] border-border">
             <div>
@@ -102,6 +101,12 @@ export default function Home() {
 
         {/* Right */}
         <div className="bg-surface relative flex items-center justify-center overflow-hidden min-h-[400px]">
+          {/* Scan Lines - Placed first to stay under cards */}
+          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            <div className="scan-line-x" style={{ animation: 'scan-x 20s linear infinite, scan-pulse 4s ease-in-out infinite' }}></div>
+            <div className="scan-line-y" style={{ animation: 'scan-y 25s linear infinite, scan-pulse-y 5s ease-in-out infinite' }}></div>
+          </div>
+
           <div className="absolute inset-0 opacity-60" style={{ backgroundImage: 'radial-gradient(circle, #21262D 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
           <div className="relative w-[340px] h-[340px] scale-90 md:scale-100">
             {/* Big Ring */}
@@ -241,7 +246,7 @@ export default function Home() {
       </div>
 
       {/* HOW IT WORKS */}
-      <div className="px-6 md:px-10 py-20 border-b-[0.5px] border-border">
+      <div id="how-it-works" className="px-6 md:px-10 py-20 border-b-[0.5px] border-border">
         <div className="max-w-7xl mx-auto w-full">
           <div className="font-mono text-[10px] text-accentGreen uppercase tracking-[0.1em] mb-4">03 — How it works</div>
           <h2 className="font-serif italic text-[38px] text-t1 leading-[1.15] tracking-[-0.02em] mb-3">
@@ -278,7 +283,7 @@ export default function Home() {
       </div>
 
       {/* CREATOR SECTION */}
-      <div className="px-6 md:px-10 py-20 border-b-[0.5px] border-border flex justify-center">
+      <div id="creators" className="px-6 md:px-10 py-20 border-b-[0.5px] border-border flex justify-center">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-20 items-center max-w-7xl w-full">
           <div>
             <div className="font-mono text-[10px] text-accentGreen uppercase tracking-[0.1em] mb-4">04 — For creators</div>
@@ -291,15 +296,16 @@ export default function Home() {
             <p className="font-sans text-[13px] text-t3 leading-[1.7] mb-7">
               You earn 20–25% of every protocol listing fee generated by your referral link, paid monthly. A creator who brings in five campaigns per month at the average listing fee earns $400–$500 passively — before touching their own feed.
             </p>
-            <button className="font-mono text-[13px] font-medium bg-accentGreen text-background border-none px-6 py-3 rounded-lg cursor-pointer tracking-[-0.01em] hover:bg-[#00e68f] transition-colors">
-              Apply as a creator →
+            <button className="font-mono text-[13px] font-medium bg-accentGreen text-background border-none px-6 py-3 rounded-lg cursor-pointer tracking-[-0.01em] hover:bg-[#00e68f] transition-colors flex items-center justify-center gap-2">
+              Apply as a creator
+              <ArrowRight className="w-4 h-4" />
             </button>
           </div>
           <div className="bg-surface border-[0.5px] border-border rounded-xl h-[300px] flex flex-col items-center justify-center relative overflow-hidden group">
             <div className="absolute inset-0 opacity-30" style={{ backgroundImage: 'radial-gradient(circle, #21262D 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
             
             <Image 
-              src="/creator_apply.png"
+              src="/creator_apply_editorial.png"
               alt="Creator Hub illustration"
               className="object-cover absolute inset-0 w-full h-full opacity-60 mix-blend-screen group-hover:scale-105 transition-transform duration-700"
               width={600}
@@ -323,19 +329,17 @@ export default function Home() {
         <p className="font-sans text-[14px] text-t3 mb-8">
           Free to use. No email required. Connect your wallet and the feed is live.
         </p>
-        <button className="font-mono text-[14px] font-medium bg-accentGreen text-background border-none px-8 py-3.5 rounded-xl cursor-pointer tracking-[-0.01em] hover:bg-[#00e68f] transition-colors">
-          Open the feed →
-        </button>
+        <ConnectButton />
       </div>
 
       {/* FOOTER */}
       <footer className="px-6 md:px-10 py-10 flex flex-col md:flex-row items-center justify-between gap-6">
         <div className="font-mono text-[15px] font-medium text-accentGreen">Loopi_</div>
         <div className="flex flex-wrap justify-center gap-5">
-          <a href="#" className="font-sans text-[12px] text-t3 no-underline hover:text-t1 transition-colors">Feed</a>
+          <a href="/feed" className="font-sans text-[12px] text-t3 no-underline hover:text-t1 transition-colors">Feed</a>
           <a href="#" className="font-sans text-[12px] text-t3 no-underline hover:text-t1 transition-colors">Docs</a>
-          <a href="#" className="font-sans text-[12px] text-t3 no-underline hover:text-t1 transition-colors">For protocols</a>
-          <a href="#" className="font-sans text-[12px] text-t3 no-underline hover:text-t1 transition-colors">Creators</a>
+          <a href="#how-it-works" className="font-sans text-[12px] text-t3 no-underline hover:text-t1 transition-colors">How it works</a>
+          <a href="#creators" className="font-sans text-[12px] text-t3 no-underline hover:text-t1 transition-colors">Creators</a>
           <a href="#" className="font-sans text-[12px] text-t3 no-underline hover:text-t1 transition-colors">X / Twitter</a>
         </div>
         <div className="font-mono text-[11px] text-t3">© {new Date().getFullYear()} Loopi · NFA</div>

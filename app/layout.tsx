@@ -22,6 +22,8 @@ export const metadata: Metadata = {
 // Minimal shell — fonts, global CSS, and base HTML structure only.
 // Dashboard pages get Sidebar/TopBar via the (dashboard)/layout.tsx group layout.
 
+import { PrivyWrapper } from "@/components/PrivyWrapper";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -38,7 +40,9 @@ export default function RootLayout({
         className={`${geist.variable} antialiased bg-[#050D09] text-[#E8F4FF]`}
         style={{ fontFamily: "var(--font-geist)" }}
       >
-        {children}
+        <PrivyWrapper>
+          {children}
+        </PrivyWrapper>
       </body>
     </html>
   );

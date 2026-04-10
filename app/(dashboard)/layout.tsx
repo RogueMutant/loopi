@@ -1,4 +1,3 @@
-import { PrivyWrapper } from "@/components/PrivyWrapper";
 import { Sidebar } from "@/components/Sidebar";
 import { TopBar } from "@/components/TopBar";
 
@@ -12,7 +11,7 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <PrivyWrapper>
+    <>
       {/* Sidebar (desktop) + bottom tab bar (mobile) */}
       <Sidebar />
 
@@ -23,6 +22,6 @@ export default function DashboardLayout({
           {children}
         </main>
       </div>
-    </PrivyWrapper>
+    </>
   );
 }
