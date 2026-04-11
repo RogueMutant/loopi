@@ -22,7 +22,27 @@ export const metadata: Metadata = {
 // Minimal shell — fonts, global CSS, and base HTML structure only.
 // Dashboard pages get Sidebar/TopBar via the (dashboard)/layout.tsx group layout.
 
+import { Instrument_Serif, IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 import { PrivyWrapper } from "@/components/PrivyWrapper";
+
+const instrumentSerif = Instrument_Serif({
+  subsets: ["latin"],
+  weight: ["400"],
+  style: ["normal", "italic"],
+  variable: "--font-instrument",
+});
+
+const ibmPlexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-ibm-plex-mono",
+});
+
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-space-grotesk",
+});
 
 export default function RootLayout({
   children,
@@ -31,13 +51,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
-      </head>
       <body
-        className={`${geist.variable} antialiased bg-[#050D09] text-[#E8F4FF]`}
+        className={`${geist.variable} ${instrumentSerif.variable} ${ibmPlexMono.variable} ${spaceGrotesk.variable} antialiased bg-[#050D09] text-[#E8F4FF]`}
         style={{ fontFamily: "var(--font-geist)" }}
       >
         <PrivyWrapper>
@@ -47,3 +62,4 @@ export default function RootLayout({
     </html>
   );
 }
+

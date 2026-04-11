@@ -23,7 +23,17 @@ import { createClient } from "@supabase/supabase-js";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type EffortLabel = "low" | "medium" | "high";
+
+// Our internal platform status — controls visibility in the user feed
 type CampaignStatus = "published" | "held" | "unpublished";
+
+// Status reported by the source platform — independent of our status
+type SourceCampaignStatus = "active" | "in_review" | "ended";
+
+interface PrizeTier {
+  place: number;
+  amount: number;
+}
 
 interface Campaign {
   id: string;
@@ -31,10 +41,23 @@ interface Campaign {
   protocol_name_raw: string;
   protocol_id: string | null;
   type: "bounty" | "infofi" | "onchain";
+
+  // Reward
   reward_usd: number;
+  reward_token: string; // "USDC" | "SOL" | "ETH" etc.
+  prize_distribution: PrizeTier[] | null;
+  winner_count: number | null;
+
+  // Campaign metadata
   entry_count: number;
   deadline: string;
   source_url: string;
+  chain: string;
+  skills_required: string[];
+
+  // Source platform status (active / in_review / ended)
+  campaign_status: SourceCampaignStatus;
+
   // Dimension scores (auto-computed)
   reward_score: number;
   effort_score: number;
@@ -42,24 +65,22 @@ interface Campaign {
   founder_score: number | null;
   effort_label: EffortLabel;
   effort_reasoning: string;
-  // Final
+
+  // Final computed score
   score: number;
+
+  // Our platform status ("published" | "held" | "unpublished")
   status: CampaignStatus;
   score_overridden: boolean;
   needs_founder_review: boolean;
-  // Overrides (set by admin)
+
+  // Admin overrides
   effort_score_override: number | null;
   founder_score_override: number | null;
   admin_notes: string;
 }
 
-interface Protocol {
-  id: string;
-  name: string;
-  trust_score: number;
-  vc_backers: string;
-  red_flags: string;
-}
+
 
 // ─── Supabase client ──────────────────────────────────────────────────────────
 
@@ -286,8 +307,9 @@ function CampaignRow({
             {campaign.title}
           </div>
           <div style={{ fontSize: 11, color: "#7D8590", marginTop: 2 }}>
-            {campaign.protocol_name_raw} · {campaign.type} · $
-            {campaign.reward_usd.toLocaleString()} · {deadlineDays}d left
+            {campaign.protocol_name_raw} · {campaign.type} ·{" "}
+            {campaign.reward_usd.toLocaleString()} {campaign.reward_token} ·{" "}
+            {deadlineDays}d left
           </div>
         </div>
 
@@ -306,6 +328,37 @@ function CampaignRow({
               }}
             >
               New protocol
+            </span>
+          )}
+          {/* Source platform status — distinct from our published/held status */}
+          {campaign.campaign_status === "in_review" && (
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 500,
+                padding: "3px 8px",
+                borderRadius: 20,
+                background: "rgba(88,166,255,0.1)",
+                color: "#58A6FF",
+                border: "0.5px solid rgba(88,166,255,0.25)",
+              }}
+            >
+              In review
+            </span>
+          )}
+          {campaign.campaign_status === "ended" && (
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 500,
+                padding: "3px 8px",
+                borderRadius: 20,
+                background: "rgba(248,81,73,0.08)",
+                color: "#F85149",
+                border: "0.5px solid rgba(248,81,73,0.2)",
+              }}
+            >
+              Ended
             </span>
           )}
           {campaign.score_overridden && (
@@ -401,6 +454,81 @@ function CampaignRow({
             >
               Effort reasoning: {campaign.effort_reasoning || "—"}
             </div>
+            {/* Prize distribution — shows true EV breakdown when available */}
+            {campaign.prize_distribution &&
+              campaign.prize_distribution.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: "8px 10px",
+                    background: "#0D1117",
+                    borderRadius: 6,
+                    border: "0.5px solid #21262D",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 10,
+                      color: "#7D8590",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.06em",
+                      marginBottom: 6,
+                    }}
+                  >
+                    Prize tiers · {campaign.winner_count} winners
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {campaign.prize_distribution.slice(0, 6).map((tier) => (
+                      <span
+                        key={tier.place}
+                        style={{
+                          fontSize: 10,
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          background: "#161B22",
+                          color: "#C9D1D9",
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        #{tier.place} {tier.amount} {campaign.reward_token}
+                      </span>
+                    ))}
+                    {campaign.prize_distribution.length > 6 && (
+                      <span style={{ fontSize: 10, color: "#7D8590" }}>
+                        +{campaign.prize_distribution.length - 6} more
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            {/* Skills */}
+            {campaign.skills_required &&
+              campaign.skills_required.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    display: "flex",
+                    gap: 4,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  {campaign.skills_required.map((skill) => (
+                    <span
+                      key={skill}
+                      style={{
+                        fontSize: 10,
+                        padding: "2px 7px",
+                        borderRadius: 20,
+                        background: "rgba(88,166,255,0.08)",
+                        color: "#58A6FF",
+                        border: "0.5px solid rgba(88,166,255,0.2)",
+                      }}
+                    >
+                      {skill}
+                    </span>
+                  ))}
+                </div>
+              )}
             <a
               href={campaign.source_url}
               target="_blank"
@@ -701,7 +829,7 @@ export default function AdminCampaigns() {
               letterSpacing: "-0.02em",
             }}
           >
-            Loopi_ Admin
+            Loopi Admin
           </div>
           <div style={{ fontSize: 12, color: "#7D8590", marginTop: 2 }}>
             Campaign score editor

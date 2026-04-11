@@ -43,10 +43,7 @@ async function getBrowser(): Promise<{ browser: Browser; isRemote: boolean }> {
   return { browser, isRemote: false };
 }
 
-async function closeBrowser(
-  browser: Browser,
-  isRemote: boolean,
-): Promise<void> {
+async function closeBrowser(browser: Browser): Promise<void> {
   // Both local and remote use the same close() — Browserless cleans up the session
   await browser.close();
 }
@@ -93,7 +90,7 @@ function blockAssets(context: Awaited<ReturnType<Browser["newContext"]>>) {
 // ─── WizzHQ Scraper ───────────────────────────────────────────────────────────
 
 export async function scrapeWizzhq(): Promise<RawCampaign[]> {
-  const { browser, isRemote } = await getBrowser();
+  const { browser } = await getBrowser();
   const context = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -135,6 +132,15 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
     //     </div>
     //   </a>
 
+    interface WizzHqCard {
+      title: string;
+      protocol: string;
+      entries: string;
+      deadline: string;
+      href: string;
+      reward: string;
+    }
+
     // Wait for at least one bounty card link to appear
     await page.waitForSelector('a[href*="/bounty/"].block', { timeout: 15000 });
 
@@ -144,10 +150,12 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
     // Select the card wrapper links — "block h-full" anchors, NOT "View Details" buttons
     // Filter: href must contain "/bounty/", class must contain "h-full" (card wrappers)
     // "View Details" buttons have "w-full text-center" — they won't match "h-full"
-    const cards = await page.$$eval('a[href*="/bounty/"]', (els) =>
-      els
-        .filter((el) => el.className.includes("h-full"))
-        .map((el) => {
+    const cards: WizzHqCard[] = await page.$$eval(
+      'a[href*="/bounty/"]',
+      (els) =>
+        els
+          .filter((el) => el.className.includes("h-full"))
+          .map((el) => {
           const href = el.getAttribute("href") ?? "";
 
           // Title: first h2, h3, b, or strong — the bolded campaign name
@@ -295,11 +303,11 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
           /Prize Distribution([\s\S]{0,2000}?)(?:Short Description|Deliverables|Required Skills|Contact|$)/i,
         );
         if (prizeSection) {
-          const matches = [
-            ...prizeSection[1].matchAll(
+          const matches = Array.from(
+            prizeSection[1].matchAll(
               /(\d+)(?:st|nd|rd|th)[^\d]*(\d[\d,]*(?:\.\d+)?)\s*(?:USDC|USDT|SOL|ETH)?/gi,
             ),
-          ];
+          );
           prizeDistribution = matches.map((m) => ({
             place: parseInt(m[1]),
             amount: parseReward(m[2]),
@@ -348,13 +356,13 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
         winner_count: winnerCount || undefined,
         skills_required: skillsRequired,
         avg_prize: avgPrize,
-      } as any);
+      });
     }
   } catch (err) {
     console.error("[wizzhq] Scrape failed:", err);
   } finally {
     await context.close();
-    await closeBrowser(browser, isRemote);
+    await closeBrowser(browser);
   }
 
   console.log(`[wizzhq] Scraped ${campaigns.length} campaigns`);
@@ -364,7 +372,7 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
 // ─── Cre8core Scraper ─────────────────────────────────────────────────────────
 
 export async function scrapeCrec8core(): Promise<RawCampaign[]> {
-  const { browser, isRemote } = await getBrowser();
+  const { browser } = await getBrowser();
   const context = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -519,7 +527,7 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
     console.error("[cre8core] Scrape failed:", err);
   } finally {
     await context.close();
-    await closeBrowser(browser, isRemote);
+    await closeBrowser(browser);
   }
 
   console.log(`[cre8core] Scraped ${campaigns.length} campaigns`);

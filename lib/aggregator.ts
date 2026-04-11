@@ -1,22 +1,17 @@
 /**
  * Loopi Campaign Aggregator
  * ─────────────────────────
- * Runs every 6 hours via Vercel Cron (configure in vercel.json).
- * Pulls campaigns from Superteam Earn, Galxe, and WizzHQ,
+ * Runs every 6 hours via Github Actions.
+ * Pulls campaigns from Superteam Earn, Galxe, WizzHQ, Layer3, and Dework.
  * deduplicates by source_url, inserts new campaigns with
  * auto-computed reward + timing scores, then triggers
  * effort classification for each new campaign.
- *
- * Usage in Next.js:
- *   app/api/cron/aggregate/route.ts  →  import { runAggregator } from "@/lib/aggregator"
- *
- * vercel.json:
- *   { "crons": [{ "path": "/api/cron/aggregate", "schedule": "0 /6 * * *" }] }
  */
 
 import { createClient } from "@supabase/supabase-js";
 import { classifyEffort } from "./classifier";
-import { scrapeWizzhq, scrapeCrec8core } from "./scrapers";
+import { scrapeWizzhq } from "./scrapers";
+// import { fetchLayer3, fetchDework } from "./sources";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -38,9 +33,27 @@ export interface RawCampaign {
   source_url: string;
   description: string;
   chain?: string;
+  reward_token?: string;
+  campaign_status?: string;
+  winner_count?: number;
+  prize_distribution?: Array<{ place: number; amount: number }>;
+  skills_required?: string[];
+  avg_prize?: number;
 }
 
 // ─── Source: Superteam Earn ───────────────────────────────────────────────────
+
+interface SuperteamBounty {
+  title: string;
+  sponsor: { name: string } | null;
+  type: string;
+  rewardAmount: number | null;
+  _count: { Comments: number } | null;
+  deadline: string | null;
+  slug: string;
+  description: string | null;
+  token: string;
+}
 
 async function fetchSuperteam(): Promise<RawCampaign[]> {
   const query = `
@@ -75,9 +88,9 @@ async function fetchSuperteam(): Promise<RawCampaign[]> {
   }
 
   const { data } = await res.json();
-  const bounties = data?.bounties ?? [];
+  const bounties: SuperteamBounty[] = data?.bounties ?? [];
 
-  return bounties.map((b: any) => ({
+  return bounties.map((b) => ({
     title: b.title,
     protocol_name: b.sponsor?.name ?? "Unknown",
     type: "bounty" as CampaignType,
@@ -91,6 +104,19 @@ async function fetchSuperteam(): Promise<RawCampaign[]> {
 }
 
 // ─── Source: Galxe ────────────────────────────────────────────────────────────
+
+interface GalxeCampaign {
+  name: string;
+  space: { name: string } | null;
+  rewardType: string;
+  tokenReward: { tokenDecimalNum: number } | null;
+  numberID: string;
+  startTime: number;
+  endTime: number;
+  description: string | null;
+  chain: string | null;
+  participants: { totalCount: number } | null;
+}
 
 async function fetchGalxe(): Promise<RawCampaign[]> {
   const query = `
@@ -131,11 +157,11 @@ async function fetchGalxe(): Promise<RawCampaign[]> {
   }
 
   const { data } = await res.json();
-  const campaigns = data?.campaigns?.list ?? [];
+  const campaigns: GalxeCampaign[] = data?.campaigns?.list ?? [];
 
   return campaigns
-    .filter((c: any) => c.endTime > Math.floor(Date.now() / 1000))
-    .map((c: any) => ({
+    .filter((c) => c.endTime > Math.floor(Date.now() / 1000))
+    .map((c) => ({
       title: c.name,
       protocol_name: c.space?.name ?? "Unknown",
       type: "infofi" as CampaignType,
@@ -153,13 +179,15 @@ async function fetchGalxe(): Promise<RawCampaign[]> {
 // In production: use a Browserless.io endpoint or Playwright in a separate worker.
 // This implementation calls a lightweight proxy endpoint you host.
 
-async function fetchWizzhq(): Promise<RawCampaign[]> {
-  return scrapeWizzhq();
-}
 
-async function fetchCrec8core(): Promise<RawCampaign[]> {
-  return scrapeCrec8core();
-}
+
+// async function fetchLayer3Campaigns(): Promise<RawCampaign[]> {
+//   return fetchLayer3();
+// }
+
+// async function fetchDeworkCampaigns(): Promise<RawCampaign[]> {
+//   return fetchDework();
+// }
 
 // ─── Scoring helpers ──────────────────────────────────────────────────────────
 
@@ -205,7 +233,7 @@ async function computeRewardScore(rawEV: number): Promise<number> {
     .order("raw_ev", { ascending: true });
 
   const evs: number[] = (existing ?? [])
-    .map((r: any) => r.raw_ev)
+    .map((r: { raw_ev: number }) => r.raw_ev)
     .concat(rawEV);
   if (evs.length < 2) return 50; // not enough data yet — default mid
 
@@ -269,20 +297,23 @@ export async function runAggregator(): Promise<{
   console.log("[aggregator] Starting run at", new Date().toISOString());
 
   // 1. Fetch from all sources in parallel
-  const [superteam, galxe, wizzhq, cre8core] = await Promise.all([
+  const [superteam, galxe, wizzhq] = await Promise.all([
     fetchSuperteam(),
     fetchGalxe(),
-    fetchWizzhq(),
-    fetchCrec8core(),
+    scrapeWizzhq(),
+    // fetchLayer3Campaigns(),
+    // fetchDeworkCampaigns(),
   ]);
-  const all = [...superteam, ...galxe, ...wizzhq, ...cre8core];
+  const all = [...superteam, ...galxe, ...wizzhq];
   console.log(`[aggregator] Fetched ${all.length} raw campaigns`);
 
   // 2. Deduplicate against existing source_urls
   const { data: existing } = await supabase
     .from("campaigns")
     .select("source_url");
-  const existingUrls = new Set((existing ?? []).map((r: any) => r.source_url));
+  const existingUrls = new Set(
+    (existing ?? []).map((r: { source_url: string }) => r.source_url),
+  );
 
   const newCampaigns = all.filter((c) => !existingUrls.has(c.source_url));
   console.log(`[aggregator] ${newCampaigns.length} new campaigns after dedup`);
@@ -291,7 +322,21 @@ export async function runAggregator(): Promise<{
   let held = 0;
 
   for (const campaign of newCampaigns) {
-    const rawEV = computeRawEV(campaign.reward_usd, campaign.entry_count);
+    // Use avg_prize from scraper when available (prize distribution known),
+    // otherwise fall back to the standard EV estimate
+    const c = campaign as RawCampaign & {
+      reward_token?: string;
+      campaign_status?: string;
+      prize_distribution?: Array<{ place: number; amount: number }>;
+      winner_count?: number;
+      skills_required?: string[];
+      avg_prize?: number;
+    };
+    const rawEV =
+      c.avg_prize != null
+        ? c.avg_prize
+        : computeRawEV(campaign.reward_usd, campaign.entry_count);
+
     const [reward_score, timing_score, effort_result, founder_result] =
       await Promise.all([
         computeRewardScore(rawEV),
@@ -302,7 +347,11 @@ export async function runAggregator(): Promise<{
         lookupFounderScore(campaign.protocol_name),
       ]);
 
-    const { effort_score, effort_label } = effort_result;
+    const {
+      effort_score,
+      effort_label,
+      reasoning: effort_reasoning,
+    } = effort_result;
     const { trust_score, protocol_id } = founder_result;
 
     // Unknown protocol → hold for manual trust research
@@ -319,7 +368,7 @@ export async function runAggregator(): Promise<{
             timing_score,
             founder_score,
           })
-        : 0; // don't show a score until founder is verified
+        : 0; // score stays 0 until founder trust is verified
 
     const { error } = await supabase.from("campaigns").insert({
       title: campaign.title,
@@ -327,6 +376,7 @@ export async function runAggregator(): Promise<{
       protocol_name_raw: campaign.protocol_name,
       type: campaign.type,
       reward_usd: campaign.reward_usd,
+      reward_token: c.reward_token ?? "USDC",
       entry_count: campaign.entry_count,
       deadline: campaign.deadline,
       source_url: campaign.source_url,
@@ -339,9 +389,15 @@ export async function runAggregator(): Promise<{
       timing_score,
       founder_score: trust_score,
       effort_label,
+      effort_reasoning: effort_reasoning ?? null,
       // Final
       score,
-      status, // "published" | "held"
+      status,
+      // New fields from scraper
+      campaign_status: c.campaign_status ?? "active",
+      prize_distribution: c.prize_distribution ?? null,
+      winner_count: c.winner_count ?? null,
+      skills_required: c.skills_required ?? [],
       // Flags for admin UI
       needs_founder_review: trust_score === null,
       score_overridden: false,

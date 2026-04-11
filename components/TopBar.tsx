@@ -8,6 +8,7 @@
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { usePrivy } from "@privy-io/react-auth";
+import { Wallet } from "lucide-react";
 
 const TABS = [
   { label: "Feed", href: "/feed" },
@@ -20,10 +21,11 @@ export function TopBar() {
   const pathname = usePathname();
   const { ready, authenticated, user, login, logout } = usePrivy();
 
-  const walletAddress = user?.wallet?.address;
-  const shortAddress = walletAddress
-    ? `0x...${walletAddress.slice(-4)}`
-    : null;
+  const address = user?.wallet?.address || user?.email?.address || "";
+  const shortAddress =
+    address.length > 20
+      ? `${address.slice(0, 5)}...${address.slice(-4)}`
+      : address || "Connected";
 
   return (
     <header
@@ -38,20 +40,11 @@ export function TopBar() {
         Loopi
       </span>
 
-      {/* Desktop wordmark */}
-      <span
-        className="hidden md:inline text-[18px] font-semibold text-[#00D282] mr-8"
-        style={{ fontFamily: "var(--font-space-grotesk)" }}
-      >
-        Loopi
-      </span>
-
       {/* Tab links */}
       <nav className="hidden md:flex items-center gap-8 flex-1">
         {TABS.map((tab) => {
           const isActive =
-            pathname === tab.href ||
-            (tab.href === "/feed" && pathname === "/");
+            pathname === tab.href || (tab.href === "/feed" && pathname === "/");
           return (
             <Link
               key={tab.href}
@@ -71,19 +64,25 @@ export function TopBar() {
 
       {/* Wallet pill */}
       <div className="ml-auto">
-        {ready && authenticated && shortAddress ? (
-          <button
-            onClick={() => logout()}
-            aria-label="Wallet account"
-            className="flex items-center gap-2 px-[14px] py-[6px] rounded-[20px]
-              text-[13px] border-[0.5px]
-              bg-[rgba(88,166,255,0.08)] border-[#58A6FF] text-[#E8F4FF]
-              hover:bg-[rgba(88,166,255,0.14)] transition-colors duration-150"
-            style={{ fontFamily: "var(--font-ibm-plex-mono)" }}
-          >
-            <span className="w-[6px] h-[6px] rounded-full bg-[#00D282]" />
-            {shortAddress}
-          </button>
+        {ready && authenticated ? (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => logout()}
+              aria-label="Logout"
+              className="font-mono font-medium text-[#00D282] bg-[#0D1117] border-[0.5px] border-[#21262D]
+                px-3 py-1.5 rounded-md text-[12px] cursor-pointer hover:border-[#30363D] transition-colors"
+            >
+              {shortAddress}
+            </button>
+            <button
+              onClick={() => logout()}
+              aria-label="Logout"
+              className="flex items-center justify-center bg-[#0D1117] text-[#00D282] border-[#21262D]
+                p-1.5 rounded-md cursor-pointer hover:border-[#30363D] border-[0.5px] transition-colors"
+            >
+              <Wallet className="w-4 h-4" />
+            </button>
+          </div>
         ) : (
           <button
             onClick={() => login()}

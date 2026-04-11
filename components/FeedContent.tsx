@@ -41,6 +41,7 @@ export function FeedContent() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>("all");
   const [sort, setSort] = useState<SortOption>("score-desc");
+  const [isSortOpen, setIsSortOpen] = useState(false);
   const [flashId, setFlashId] = useState<string | null>(null);
 
   // ─── Fetch campaigns ──────────────────────────────────────────────────────
@@ -180,39 +181,59 @@ export function FeedContent() {
           ))}
         </div>
 
-        {/* Sort dropdown */}
+        {/* Custom Sort dropdown */}
         <div className="relative">
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortOption)}
-            aria-label="Sort campaigns"
-            className="appearance-none bg-[#0D1117] border-[0.5px] border-[#21262D]
-              rounded-[8px] px-[14px] py-2 pr-8 text-[13px] text-[#C9D1D9]
-              cursor-pointer outline-none focus:border-[#30363D]"
+          <button
+            aria-expanded={isSortOpen}
+            onClick={() => setIsSortOpen(!isSortOpen)}
+            onBlur={() => setTimeout(() => setIsSortOpen(false), 200)}
+            className="flex items-center gap-2 bg-[#0D1117] border-[0.5px] border-[#21262D]
+              rounded-[8px] px-[14px] py-2 text-[13px] text-[#C9D1D9]
+              cursor-pointer outline-none hover:border-[#30363D] transition-colors"
             style={{ fontFamily: "var(--font-geist)" }}
           >
-            {(Object.entries(SORT_LABELS) as [SortOption, string][]).map(
-              ([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ),
-            )}
-          </select>
-          {/* Chevron */}
-          <svg
-            className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-[#7D8590]"
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
+            {SORT_LABELS[sort]}
+            {/* Chevron */}
+            <svg
+              className={`text-[#7D8590] transition-transform duration-200 ${
+                isSortOpen ? "rotate-180" : ""
+              }`}
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+
+          {isSortOpen && (
+            <div className="absolute right-0 top-full mt-2 w-48 bg-[#0D1117] border-[0.5px] border-[#30363D] rounded-[8px] overflow-hidden shadow-2xl z-10 flex flex-col py-1">
+              {(Object.entries(SORT_LABELS) as [SortOption, string][]).map(
+                ([value, label]) => (
+                  <button
+                    key={value}
+                    onClick={() => {
+                      setSort(value);
+                      setIsSortOpen(false);
+                    }}
+                    className={`text-left px-4 py-2 text-[13px] hover:bg-[#161B22] transition-colors ${
+                      sort === value
+                        ? "text-[#00D282] font-medium bg-[#161B22]"
+                        : "text-[#C9D1D9]"
+                    }`}
+                    style={{ fontFamily: "var(--font-geist)" }}
+                  >
+                    {label}
+                  </button>
+                ),
+              )}
+            </div>
+          )}
         </div>
       </div>
 
