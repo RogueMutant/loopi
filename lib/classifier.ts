@@ -1,11 +1,11 @@
 /**
  * Loopi Effort Classifier
  * ───────────────────────
- * Calls the Gemini API to classify campaign effort level
+ * Calls the Claude API to classify campaign effort level
  * (Low / Medium / High) from the campaign title and description.
  *
  * This replaces the manual "Admin assigns effort" step.
- * Cost: Very low cost on Gemini 2.5 flash.
+ * Cost: ~0.001 USD per campaign at claude-haiku-4-5 pricing.
  * Speed: ~1s per campaign.
  *
  * Effort → Score mapping:
@@ -42,7 +42,11 @@ When uncertain between two levels, choose the lower effort level (bias toward LO
 Respond ONLY with valid JSON in this exact format — no other text:
 {"effort": "low"|"medium"|"high", "reasoning": "one sentence explanation"}`;
 
-import { GoogleGenAI, Type, Schema } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY!,
+});
 
 export async function classifyEffort(
   title: string,
@@ -58,58 +62,53 @@ Campaign description: ${truncatedDesc}
 Classify the effort level.`;
 
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    
-    const responseSchema: Schema = {
-      type: Type.OBJECT,
-      properties: {
-        effort: {
-          type: Type.STRING,
-          enum: ["low", "medium", "high"],
-          description: "The classified effort level."
-        },
-        reasoning: {
-          type: Type.STRING,
-          description: "One sentence explanation of the classification."
-        }
-      },
-      required: ["effort", "reasoning"]
-    };
-
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: userMessage,
+      contents: [{ role: "user", parts: [{ text: userMessage }] }],
       config: {
         systemInstruction: SYSTEM_PROMPT,
         responseMimeType: "application/json",
-        responseSchema: responseSchema,
-        temperature: 0.1, // Keep it deterministic
-      }
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            effort: { type: "STRING", enum: ["low", "medium", "high"] },
+            reasoning: { type: "STRING" },
+          },
+          required: ["effort", "reasoning"],
+        },
+      },
     });
 
-    if (!response.text) {
-        console.error("[classifier] Empty response from Gemini");
-        return fallback();
-    }
-
-    const text = response.text;
-    
-    // Parse JSON response
-    const parsed = JSON.parse(text.trim());
-    const effort_label = parsed.effort as EffortLabel;
-
-    if (!["low", "medium", "high"].includes(effort_label)) {
-      console.warn("[classifier] Unexpected effort value:", effort_label);
+    const text = response.text || "";
+    if (!text) {
+      console.warn("[classifier] Empty response from Gemini");
       return fallback();
     }
+
+    let parsed: { effort?: string; reasoning?: string };
+    try {
+      parsed = JSON.parse(text.trim());
+    } catch {
+      console.warn("[classifier] Could not parse JSON response:", text.slice(0, 100));
+      return fallback();
+    }
+
+    const effortLabel = (parsed.effort || "").toLowerCase();
+    if (!["low", "medium", "high"].includes(effortLabel)) {
+      console.warn("[classifier] Unexpected effort value:", effortLabel);
+      return fallback();
+    }
+
+    const effort_label = effortLabel as EffortLabel;
 
     return {
       effort_label,
       effort_score: EFFORT_SCORE_MAP[effort_label],
       reasoning: parsed.reasoning ?? "",
     };
-  } catch (err) {
-    console.error("[classifier] Error:", err);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[classifier] API error:", message);
     return fallback();
   }
 }

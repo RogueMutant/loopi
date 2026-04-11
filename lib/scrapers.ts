@@ -43,7 +43,9 @@ async function getBrowser(): Promise<{ browser: Browser; isRemote: boolean }> {
   return { browser, isRemote: false };
 }
 
-async function closeBrowser(browser: Browser): Promise<void> {
+async function closeBrowser(
+  browser: Browser,
+): Promise<void> {
   // Both local and remote use the same close() — Browserless cleans up the session
   await browser.close();
 }
@@ -90,7 +92,9 @@ function blockAssets(context: Awaited<ReturnType<Browser["newContext"]>>) {
 // ─── WizzHQ Scraper ───────────────────────────────────────────────────────────
 
 export async function scrapeWizzhq(): Promise<RawCampaign[]> {
-  const { browser } = await getBrowser();
+  const { browser, isRemote } = await getBrowser();
+  if (isRemote) console.log("[wizzhq] Using remote Browserless session");
+  
   const context = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -108,70 +112,25 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
       timeout: 30000,
     });
 
-    // What the debugger revealed:
-    // Each bounty card is wrapped in <a class="block h-full" href="/bounty/[slug]">
-    // The "View Details" button is a SEPARATE <a class="block w-full text-center...">
-    // WizzHQ uses Tailwind — no semantic class names like "bounty-card" exist.
-    //
-    // Card internal structure (inferred from screenshot + concatenated text):
-    //   <a class="block h-full" href="/bounty/slug">
-    //     <div>  ← card wrapper with colored left border
-    //       <img />  ← protocol logo
-    //       <div>
-    //         <h2 or b or strong>PRED: Trade the Game</h2>  ← title
-    //         <span or a>Pred</span>                        ← protocol (colored)
-    //       </div>
-    //       <div>
-    //         <span>Bounty</span><span>Content</span>       ← type tags
-    //       </div>
-    //       <p>description text...</p>
-    //       <div>
-    //         <span>35 Submissions</span>                   ← entries (contains "Submissions")
-    //         <span>6 days left</span>                      ← deadline (contains "left" or "Review")
-    //       </div>
-    //     </div>
-    //   </a>
-
-    interface WizzHqCard {
-      title: string;
-      protocol: string;
-      entries: string;
-      deadline: string;
-      href: string;
-      reward: string;
-    }
-
-    // Wait for at least one bounty card link to appear
     await page.waitForSelector('a[href*="/bounty/"].block', { timeout: 15000 });
 
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(2000);
 
-    // Select the card wrapper links — "block h-full" anchors, NOT "View Details" buttons
-    // Filter: href must contain "/bounty/", class must contain "h-full" (card wrappers)
-    // "View Details" buttons have "w-full text-center" — they won't match "h-full"
-    const cards: WizzHqCard[] = await page.$$eval(
-      'a[href*="/bounty/"]',
-      (els) =>
-        els
-          .filter((el) => el.className.includes("h-full"))
-          .map((el) => {
+    const cards = await page.$$eval('a[href*="/bounty/"]', (els) =>
+      els
+        .filter((el) => el.className.includes("h-full"))
+        .map((el) => {
           const href = el.getAttribute("href") ?? "";
-
-          // Title: first h2, h3, b, or strong — the bolded campaign name
           const titleEl =
             el.querySelector("h2, h3, b, strong") ??
             el.querySelector("[class*='font-bold'], [class*='font-semibold']");
           const title = titleEl?.textContent?.trim() ?? "";
 
-          // Protocol: the element immediately after the title that is NOT a heading.
-          // On WizzHQ this is a colored anchor or span (e.g. "Pred" in purple).
-          // Strategy: get all direct text nodes / spans after the logo area.
-          // The protocol name appears as the second distinct text block in the header.
           const allTextNodes = Array.from(
             el.querySelectorAll("a, span, p"),
           ).map((n) => n.textContent?.trim() ?? "");
-          // Protocol is typically a short colored word right after the title
+          
           const protocol =
             allTextNodes.find(
               (t) =>
@@ -187,7 +146,6 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
                 !t.includes("View"),
             ) ?? "";
 
-          // Entries: span/div containing "Submissions" or "submissions"
           const entriesEl = Array.from(
             el.querySelectorAll("span, div, p"),
           ).find(
@@ -197,7 +155,6 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
           );
           const entries = entriesEl?.textContent?.trim() ?? "0";
 
-          // Deadline: span/div containing "left", "days", "hours", or "Review"
           const deadlineEl = Array.from(
             el.querySelectorAll("span, div, p"),
           ).find(
@@ -209,8 +166,6 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
           );
           const deadline = deadlineEl?.textContent?.trim() ?? "";
 
-          // WizzHQ reward is NOT on the card — it's only on the detail page.
-          // We set 0 here and fetch it from the detail page below.
           return { title, protocol, entries, deadline, href, reward: "" };
         })
         .filter((c) => c.title.length > 0),
@@ -219,13 +174,11 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
     for (const card of cards) {
       if (!card.title) continue;
 
-      // Card hrefs are /bounty/[slug] — NOT /bounties/[slug]
-      // Running debugSelectors on /bounties/slug returns empty HTML (wrong URL)
       const sourceUrl = card.href.startsWith("http")
         ? card.href
         : `https://wizzhq.xyz${card.href}`;
 
-      let description = "";
+      const description = "";
       let rewardToken = "USDC";
       let rewardUsd = 0;
       let campaignStatus: "active" | "in_review" | "ended" = "active";
@@ -234,38 +187,25 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
       let skillsRequired: string[] = [];
 
       try {
-        const detailPage = await context.newPage();
-        await detailPage.goto(sourceUrl, {
-          waitUntil: "networkidle",
-          timeout: 25000,
+        const detailRes = await fetch(sourceUrl, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            Accept: "text/html,application/xhtml+xml",
+          },
+          signal: AbortSignal.timeout(15000),
         });
 
-        // ── Description ──────────────────────────────────────────────────────
-        // Debug row 7 confirmed: sections use Tailwind class "bg-card"
-        // First bg-card section = Short Description. Strip the heading text.
-        const descRaw = await safeText(
-          detailPage,
-          ".bg-card p, [class*='bg-card'] p",
-        );
-        description = descRaw
-          .replace(/^Short Description\s*/i, "")
-          .slice(0, 1000);
-        if (!description) {
-          const paras = await detailPage.$$eval("p", (els) =>
-            els
-              .map((el) => el.textContent?.trim() ?? "")
-              .filter((t) => t.length > 40),
-          );
-          description = paras[0]?.slice(0, 1000) ?? "";
-        }
+        if (!detailRes.ok) throw new Error(`HTTP ${detailRes.status}`);
+        const rawHtml = await detailRes.text();
 
-        // ── Reward ───────────────────────────────────────────────────────────
-        // PDF shows: "Total Prize Pool" then "1000 USDC" as two separate elements.
-        // Scan full body text for this pattern.
-        const bodyText = await detailPage.$eval(
-          "body",
-          (b) => b.textContent ?? "",
-        );
+        const bodyText = rawHtml
+          .replace(/<script[\s\S]*?<\/script>/gi, "")
+          .replace(/<style[\s\S]*?<\/style>/gi, "")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
 
         const poolMatch = bodyText.match(
           /Total Prize Pool[\s\S]{0,60}?([\d,]+(?:\.\d+)?)\s*(USDC|USDT|SOL|ETH|BNB|MATIC)/i,
@@ -283,8 +223,6 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
           }
         }
 
-        // ── Campaign status ───────────────────────────────────────────────────
-        // Listing card already gave us "In Review" hint via card.deadline
         if (
           card.deadline.toLowerCase().includes("in review") ||
           bodyText.toLowerCase().includes("in review")
@@ -297,17 +235,15 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
           campaignStatus = "ended";
         }
 
-        // ── Prize distribution ────────────────────────────────────────────────
-        // PDF: 1st→300, 2nd→200, 3rd-12th→50 each. Extract ordinal+amount pairs.
         const prizeSection = bodyText.match(
           /Prize Distribution([\s\S]{0,2000}?)(?:Short Description|Deliverables|Required Skills|Contact|$)/i,
         );
         if (prizeSection) {
-          const matches = Array.from(
-            prizeSection[1].matchAll(
+          const matches = [
+            ...prizeSection[1].matchAll(
               /(\d+)(?:st|nd|rd|th)[^\d]*(\d[\d,]*(?:\.\d+)?)\s*(?:USDC|USDT|SOL|ETH)?/gi,
             ),
-          );
+          ];
           prizeDistribution = matches.map((m) => ({
             place: parseInt(m[1]),
             amount: parseReward(m[2]),
@@ -315,8 +251,6 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
           winnerCount = prizeDistribution.length;
         }
 
-        // ── Skills required ───────────────────────────────────────────────────
-        // PDF: "Required Skills → Content Creator"
         const skillsMatch = bodyText.match(
           /Required Skills?\s*\n?([\s\S]{0,200}?)(?:\n{2}|Contact|Deliverables|$)/i,
         );
@@ -326,14 +260,12 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
             .map((s) => s.trim())
             .filter((s) => s.length > 2 && s.length < 50 && /[a-zA-Z]/.test(s));
         }
-
-        await detailPage.close();
       } catch (err) {
         console.error(`[wizzhq] Detail fetch failed for ${sourceUrl}:`, err);
       }
 
-      const entryCount = parseInt(card.entries.replace(/\D/g, "")) || 0;
-      // True EV: average prize × (winners / entries)
+      const rawEntries = parseInt(card.entries.replace(/[^0-9]/g, "")) || 0;
+      const entryCount = rawEntries > 10_000_000 ? 0 : rawEntries;
       const avgPrize =
         winnerCount > 0
           ? prizeDistribution.reduce((s, p) => s + p.amount, 0) / winnerCount
@@ -356,7 +288,7 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
         winner_count: winnerCount || undefined,
         skills_required: skillsRequired,
         avg_prize: avgPrize,
-      });
+      } as RawCampaign);
     }
   } catch (err) {
     console.error("[wizzhq] Scrape failed:", err);
@@ -372,7 +304,9 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
 // ─── Cre8core Scraper ─────────────────────────────────────────────────────────
 
 export async function scrapeCrec8core(): Promise<RawCampaign[]> {
-  const { browser } = await getBrowser();
+  const { browser, isRemote } = await getBrowser();
+  if (isRemote) console.log("[cre8core] Using remote Browserless session");
+
   const context = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -394,7 +328,6 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
       timeout: 15000,
     });
 
-    // Scroll fully to bottom to trigger any infinite scroll / lazy load
     await page.evaluate(async () => {
       await new Promise<void>((resolve) => {
         let lastHeight = 0;
@@ -446,7 +379,6 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
           .filter((c) => c.title && c.href),
     );
 
-    // Deduplicate by href
     const seen = new Set<string>();
     const unique = cardData.filter((c) => {
       if (seen.has(c.href)) return false;
@@ -454,7 +386,6 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
       return true;
     });
 
-    // Fetch detail pages in batches of 5
     const BATCH = 5;
     for (let i = 0; i < unique.length; i += BATCH) {
       const batch = unique.slice(i, i + BATCH);
@@ -496,7 +427,7 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
 
             await detailPage.close();
           } catch {
-            // detail failed — use card data
+            // detail failed
           }
 
           return {
@@ -533,14 +464,6 @@ export async function scrapeCrec8core(): Promise<RawCampaign[]> {
   console.log(`[cre8core] Scraped ${campaigns.length} campaigns`);
   return campaigns;
 }
-
-// ─── Selector debugger ────────────────────────────────────────────────────────
-// Run locally when a site updates and selectors break.
-// Uses local Chromium in headed mode so you can see the live page.
-//
-// npx ts-node -e "
-//   import('./lib/scrapers').then(m => m.debugSelectors('https://wizzhq.xyz/bounties'))
-// "
 
 export async function debugSelectors(url: string): Promise<void> {
   const browser = await chromium.launch({ headless: false });
