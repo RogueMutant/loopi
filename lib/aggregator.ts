@@ -1,14 +1,22 @@
-/**
- * Loopi Campaign Aggregator
- * ─────────────────────────
- * Runs every 6 hours via Vercel Cron.
- * Pulls campaigns from various sources, deduplicates, and scores them.
- */
+// Loopi Campaign Aggregator
+// ─────────────────────────
+// Runs every 6 hours via Vercel Cron (configure in vercel.json).
+// Pulls campaigns from Superteam Earn, Galxe, WizzHQ, Questn, and Dework.
+// Deduplicates by source_url, inserts new campaigns with
+// auto-computed reward + timing scores, then triggers
+// effort classification for each new campaign.
+//
+// Usage in Next.js:
+//   app/api/cron/aggregate/route.ts  ->  import { runAggregator } from "@/lib/aggregator"
+//
+// vercel.json:
+//   { "crons": [{ "path": "/api/cron/aggregate", "schedule": "0 */6 * * *" }] }
+//   NOTE: the */6 above is a cron interval — not a JS comment terminator.
 
 import { createClient } from "@supabase/supabase-js";
 import { classifyEffort } from "./classifier";
 import { scrapeWizzhq } from "./scrapers";
-import { fetchLayer3, fetchDework } from "./sources";
+import { fetchQuestn, fetchDework } from "./sources";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -25,104 +33,125 @@ export interface RawCampaign {
   protocol_name: string;
   type: CampaignType;
   reward_usd: number;
+  /** Token symbol, e.g. "USDC", "SOL", "POINTS" */
+  reward_token?: string;
   entry_count: number;
-  deadline: string | null;
+  deadline: string; // ISO date string
   source_url: string;
   description: string;
   chain?: string;
-  avg_prize?: number;
-  reward_token?: string;
-  campaign_status?: string;
-  prize_distribution?: unknown;
-  winner_count?: number;
+  /** Current lifecycle state of the campaign on the source platform */
+  campaign_status?: "active" | "in_review" | "ended";
+  /** Tags / skill labels associated with the campaign */
   skills_required?: string[];
-}
-
-interface SuperteamBounty {
-  title: string;
-  slug?: string;
-  id?: string;
-  type?: string;
-  sponsor?: { name: string };
-  sponsorName?: string;
-  rewardAmount?: number;
-  usdValue?: number;
-  token?: string;
-  totalSubmissions?: number;
-  totalWinnersSelected?: number;
-  submissionCount?: number;
-  _count?: { Comments?: number };
-  isPublished?: boolean;
-  deadline?: string;
-  shortDescription?: string;
-  description?: string;
-  isActive?: boolean;
-}
-
-interface GalxeCampaign {
-  id: string;
-  numberID: number;
-  name: string;
-  endTime?: number;
-  space?: { name?: string; alias?: string };
-  participantsCount?: number;
-  claimedTimes?: number;
-  description?: string;
-  chain?: string;
+  /** Prize breakdown, e.g. [{ place: 1, amount: 500 }] */
+  prize_distribution?: Record<string, unknown>[] | null;
+  /** How many winners the campaign awards */
+  winner_count?: number | null;
+  /**
+   * Average prize per winner — set by scrapers that know the full
+   * prize distribution (e.g. WizzHQ). When present the aggregator
+   * uses this directly as rawEV instead of estimating from reward_usd.
+   */
+  avg_prize?: number | null;
 }
 
 // ─── Source: Superteam Earn ───────────────────────────────────────────────────
 //
-// Superteam's API requires browser-like headers and follows redirects.
-// We try three strategies in order:
-//   1. REST API with full browser headers + redirect following
-//   2. Alternate API path (/api/v2/listings)
-//   3. RSS feed fallback — always works, no auth, slightly less data
+// Confirmed working endpoint (verified April 2026 via browser DevTools):
+//   https://superteam.fun/api/listings
 //
-// When you confirm the correct endpoint from browser devtools, set
-// SUPERTEAM_API_URL env var to skip the probe and go direct.
+// Query params: context, tab, category, status, sortBy, order, region, sponsor
+// Response: a flat JSON array of listing objects (NOT wrapped in {bounties:[]}).
+// Pagination: the API supports `skip` + `take` appended to the above params.
+//
+// Important field mappings from the real response:
+//   _count.Submission  → entry_count  (actual submission count)
+//   _count.Comments    → comment count (ignored for scoring)
+//   sponsor.name       → protocol_name
+//   slug               → used to build source_url
+//   status ("OPEN")    → campaign_status (uppercased on the API side)
+//
+// If you need to change the region/category filter, set SUPERTEAM_API_URL env
+// var to the full base URL and adjust SUPERTEAM_API_PARAMS below.
+
+const SUPERTEAM_BASE_URL = "https://superteam.fun/api/listings";
+
+/** Default query string params that match what the Superteam Earn page sends */
+const SUPERTEAM_DEFAULT_PARAMS = new URLSearchParams({
+  context: "home",
+  tab: "bounties",
+  category: "All",
+  status: "open",
+  sortBy: "Date",
+  order: "asc",
+  region: "",
+  sponsor: "",
+});
 
 const SUPERTEAM_BROWSER_HEADERS = {
   Accept: "application/json, text/plain, */*",
   "User-Agent":
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  Referer: "https://earn.superteam.fun",
-  Origin: "https://earn.superteam.fun",
+  Referer: "https://superteam.fun/earn/",
+  Origin: "https://superteam.fun",
   "Accept-Language": "en-US,en;q=0.9",
 };
 
+/**
+ * Fetches a single page from the Superteam listings REST API.
+ * Returns the flat array of raw listing objects, or null if the endpoint
+ * is unreachable / returns non-JSON.
+ */
 async function fetchSuperteamREST(
   baseUrl: string,
-): Promise<SuperteamBounty[] | null> {
-  const campaigns: SuperteamBounty[] = [];
+  extraParams?: URLSearchParams,
+): Promise<unknown[] | null> {
+  const campaigns: unknown[] = [];
   let skip = 0;
   const take = 50;
 
-  while (skip < 150) {
-    const url = `${baseUrl}?take=${take}&skip=${skip}&isPublished=true&status=open`;
-    const res = await fetch(url, {
-      headers: SUPERTEAM_BROWSER_HEADERS,
-      redirect: "follow",
-    });
+  while (skip < 300) {
+    const params = new URLSearchParams(extraParams ?? SUPERTEAM_DEFAULT_PARAMS);
+    params.set("skip", String(skip));
+    params.set("take", String(take));
 
-    // "Redirecting..." as text means middleware blocked us
-    const contentType = res.headers.get("content-type") ?? "";
-    if (!res.ok || !contentType.includes("application/json")) {
-      const body = await res.text().catch(() => "");
-      if (body.toLowerCase().includes("redirecting") || body.startsWith("<!")) {
-        // Not JSON — this endpoint needs auth or different headers
-        return null;
-      }
-      console.error("[superteam] REST error:", res.status, body.slice(0, 100));
+    const url = `${baseUrl}?${params.toString()}`;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: SUPERTEAM_BROWSER_HEADERS,
+        redirect: "follow",
+      });
+    } catch (err) {
+      console.error("[superteam] Network error:", err);
       return null;
     }
 
-    const json = await res.json();
-    const page = (json.bounties ?? json.listings ?? json.data ?? []) as SuperteamBounty[];
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!res.ok || !contentType.includes("application/json")) {
+      const body = await res.text().catch(() => "");
+      if (body.toLowerCase().includes("redirecting") || body.startsWith("<")) {
+        return null; // Middleware / HTML — not JSON
+      }
+      console.error("[superteam] REST error:", res.status, body.slice(0, 200));
+      return null;
+    }
+
+    const json: unknown = await res.json();
+
+    // Real API returns a flat array; some older paths wrap in an object
+    const page: unknown[] = Array.isArray(json)
+      ? json
+      : ((json as Record<string, unknown[]>).bounties ??
+        (json as Record<string, unknown[]>).listings ??
+        (json as Record<string, unknown[]>).data ??
+        []);
+
     if (!Array.isArray(page) || page.length === 0) break;
 
     campaigns.push(...page);
-    if (page.length < take) break;
+    if (page.length < take) break; // last page
     skip += take;
     await new Promise((r) => setTimeout(r, 400));
   }
@@ -134,7 +163,7 @@ async function fetchSuperteamRSS(): Promise<RawCampaign[]> {
   // Superteam publishes an RSS feed of new listings — no auth required.
   // Less data than the API (no reward amounts, no submission counts) but
   // reliable as a fallback. We scrape metadata from the feed entries.
-  const RSS_URL = "https://earn.superteam.fun/rss.xml";
+  const RSS_URL = "https://superteam.fun/rss.xml";
 
   const res = await fetch(RSS_URL, {
     headers: { "User-Agent": "Loopi/1.0" },
@@ -188,7 +217,7 @@ async function fetchSuperteamRSS(): Promise<RawCampaign[]> {
       description: description.slice(0, 1000),
       chain: "solana",
       campaign_status: "active",
-    } as unknown as RawCampaign);
+    } satisfies RawCampaign);
   }
 
   console.log(
@@ -198,78 +227,123 @@ async function fetchSuperteamRSS(): Promise<RawCampaign[]> {
 }
 
 async function fetchSuperteam(): Promise<RawCampaign[]> {
-  // Strategy 1: use override env var if set (fastest — skip probing)
-  const overrideUrl = process.env.SUPERTEAM_API_URL;
-  if (overrideUrl) {
-    console.log(`[superteam] Using SUPERTEAM_API_URL override: ${overrideUrl}`);
-    const data = await fetchSuperteamREST(overrideUrl);
-    if (data) return mapSuperteamListings(data);
+  // Strategy 1: env var override — fastest, skips all probing.
+  // Set SUPERTEAM_API_URL in GitHub Actions / Vercel env if the endpoint changes.
+  const overrideUrl = process.env.SUPERTEAM_API_URL ?? SUPERTEAM_BASE_URL;
+
+  console.log(`[superteam] Trying REST endpoint: ${overrideUrl}`);
+  const data = await fetchSuperteamREST(overrideUrl);
+  if (data && data.length > 0) {
+    console.log(
+      `[superteam] REST success — ${data.length} raw listings from ${overrideUrl}`,
+    );
+    return mapSuperteamListings(data);
   }
 
-  // Strategy 2: probe known REST endpoints in order
-  const REST_CANDIDATES = [
-    "https://earn.superteam.fun/api/listings",
-    "https://earn.superteam.fun/api/v2/listings",
-    "https://earn.superteam.fun/api/opportunities",
-    "https://earn.superteam.fun/api/bounties",
-  ];
-
-  for (const url of REST_CANDIDATES) {
-    console.log(`[superteam] Trying REST endpoint: ${url}`);
-    const data = await fetchSuperteamREST(url);
-    if (data) {
-      console.log(
-        `[superteam] Success with: ${url} — add SUPERTEAM_API_URL=${url} to env to skip probing`,
-      );
-      return mapSuperteamListings(data);
-    }
-  }
-
-  // Strategy 3: RSS fallback — always works
-  console.warn("[superteam] All REST endpoints failed — falling back to RSS");
+  // Strategy 2: RSS fallback (no reward amounts, but always reachable)
+  console.warn(
+    "[superteam] REST endpoint returned no data — falling back to RSS feed",
+  );
   return fetchSuperteamRSS();
 }
 
-function mapSuperteamListings(bounties: SuperteamBounty[]): RawCampaign[] {
-  return bounties
-    .filter((b) => b.title && b.isPublished !== false)
+// fetchSuperteamScraped() removed — superteam.fun does not SSR __NEXT_DATA__
+// into the listings page in the same way. The REST API (fetchSuperteamREST) is
+// the reliable path; RSS (fetchSuperteamRSS) is the fallback.
+
+/**
+ * Maps raw Superteam API listing objects → RawCampaign.
+ *
+ * Field mapping (from real API response, April 2026):
+ *   b.rewardAmount          → reward_usd
+ *   b.token                 → reward_token
+ *   b._count.Submission     → entry_count  (actual submissions, not comments)
+ *   b._count.Comments       → ignored (comment count, not relevant for scoring)
+ *   b.sponsor.name          → protocol_name
+ *   b.slug                  → used to build source_url
+ *   b.status ("OPEN")       → campaign_status mapped to lowercase "active"
+ */
+function mapSuperteamListings(bounties: unknown[]): RawCampaign[] {
+  return (bounties as Record<string, unknown>[])
+    .filter(
+      (b) => !!b.title && b.status !== "CLOSED" && b.status !== "CANCELLED",
+    )
     .map((b) => {
-      const slug = b.slug ?? b.id ?? "";
-      const listingType = b.type?.toLowerCase() ?? "bounty";
+      const slug = (b.slug ?? b.id ?? "") as string;
+      const listingType = ((b.type as string) ?? "bounty").toLowerCase();
       const urlPath =
-        listingType === "hackathon"
-          ? `hackathon/${slug}`
-          : `listings/${listingType === "project" ? "projects" : "bounties"}/${slug}`;
+        listingType === "hackathon" ? `hackathon/${slug}` : `earn/${slug}`; // real Superteam URL pattern: superteam.fun/earn/<slug>
+
+      const _count = (b._count ?? {}) as Record<string, number>;
+
+      // campaign_status: API returns uppercase "OPEN", "CLOSED", "IN_REVIEW"
+      const rawStatus = ((b.status as string) ?? "").toUpperCase();
+      const campaignStatus: RawCampaign["campaign_status"] =
+        rawStatus === "IN_REVIEW"
+          ? "in_review"
+          : rawStatus === "CLOSED" || rawStatus === "DONE"
+            ? "ended"
+            : "active";
 
       return {
-        title: b.title,
-        protocol_name: b.sponsor?.name ?? b.sponsorName ?? "Unknown",
+        title: b.title as string,
+        protocol_name:
+          (b.sponsor as Record<string, string>)?.name ??
+          (b as Record<string, string>).sponsorName ??
+          "Unknown",
         type: "bounty" as CampaignType,
-        reward_usd: safeNumber(b.rewardAmount ?? b.usdValue ?? 0),
-        reward_token: b.token ?? "USDC",
+        reward_usd: safeNumber((b.rewardAmount ?? 0) as number),
+        reward_token: (b.token as string | undefined) ?? "USDC",
+        // Use Submission count — this is the real participant/submission count.
+        // Comments is a moderation/discussion count and inflates EV estimates.
         entry_count: safeEntryCount(
-          b.totalWinnersSelected ??
-            b._count?.Comments ??
-            b.submissionCount ??
+          _count.Submission ??
+            (b as Record<string, number>).submissionCount ??
             0,
         ),
         deadline:
-          b.deadline ?? new Date(Date.now() + 7 * 86400000).toISOString(),
-        source_url: `https://earn.superteam.fun/${urlPath}`,
-        description: b.description ?? b.shortDescription ?? "",
+          (b.deadline as string | undefined) ??
+          new Date(Date.now() + 7 * 86400000).toISOString(),
+        source_url: `https://superteam.fun/${urlPath}`,
+        description: (
+          (b.description ?? b.shortDescription ?? "") as string
+        ).slice(0, 2000),
         chain: "solana",
-        campaign_status: b.isActive === false ? "ended" : "active",
-      } as unknown as RawCampaign;
+        campaign_status: campaignStatus,
+        skills_required: [],
+      } satisfies RawCampaign;
     });
 }
 
-// ─── Source: Galxe ────────────────────────────────────────────────────────────
+// ─── Types for Galxe GraphQL response ────────────────────────────────────────
+
+interface GalxeSpace {
+  name?: string;
+  alias?: string;
+}
+interface GalxeListItem {
+  id: string;
+  name?: string;
+  numberID?: string | number;
+  startTime?: number;
+  endTime?: number;
+  description?: string;
+  chain?: string;
+  participantCount?: number;
+  space?: GalxeSpace;
+}
+interface GalxeResponse {
+  data?: { campaigns?: { list?: GalxeListItem[] } };
+  errors?: { message?: string }[];
+}
 
 async function fetchGalxe(): Promise<RawCampaign[]> {
   // Galxe rebranded and updated their API. Current endpoint as of April 2026:
   // https://graphigo.prd.galaxy.eco/query (same host, updated query schema)
   // If this 404s again, try: https://api.galxe.com/query
   // The campaigns() query now uses a different input shape.
+  // claimedTimes requires an address argument — removed to avoid schema error.
+  // participantCount is a plain integer field available without args.
   const query = `
     query CampaignList {
       campaigns(
@@ -290,12 +364,7 @@ async function fetchGalxe(): Promise<RawCampaign[]> {
           endTime
           description
           chain
-          claimedTimes
-          credentialGroups(address: "") {
-            credentials {
-              name
-            }
-          }
+          participantCount
         }
         pageInfo { endCursor hasNextPage }
       }
@@ -308,7 +377,7 @@ async function fetchGalxe(): Promise<RawCampaign[]> {
     "https://api.galxe.com/query",
   ];
 
-  let json: { data?: { campaigns?: { list?: unknown[] } }; errors?: { message: string }[] } | null = null;
+  let json: GalxeResponse | null = null;
 
   for (const endpoint of ENDPOINTS) {
     try {
@@ -330,13 +399,15 @@ async function fetchGalxe(): Promise<RawCampaign[]> {
 
       json = await res.json();
 
-      if (json && json.errors?.length) {
-        console.warn(
-          `[galxe] ${endpoint} GraphQL error:`,
-          json.errors[0]?.message,
-        );
-        json = null;
-        continue;
+      if (json !== null) {
+        if (json.errors?.length) {
+          console.warn(
+            `[galxe] ${endpoint} GraphQL error:`,
+            json.errors[0]?.message,
+          );
+          json = null;
+          continue;
+        }
       }
 
       // Successfully got data
@@ -353,20 +424,19 @@ async function fetchGalxe(): Promise<RawCampaign[]> {
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const list = (json.data?.campaigns?.list ?? []) as GalxeCampaign[];
-  if (!Array.isArray(list)) return [];
+  const list: GalxeListItem[] = json.data?.campaigns?.list ?? [];
 
   return list
     .filter((c) => !c.endTime || c.endTime > now)
     .map(
       (c) =>
         ({
-          title: c.name,
+          title: c.name ?? "",
           protocol_name: c.space?.name ?? c.space?.alias ?? "Unknown",
           type: "infofi" as CampaignType,
           reward_usd: 0,
           reward_token: "POINTS",
-          entry_count: safeEntryCount(c.claimedTimes ?? 0),
+          entry_count: safeEntryCount(c.participantCount ?? 0),
           deadline: c.endTime
             ? new Date(c.endTime * 1000).toISOString()
             : new Date(Date.now() + 14 * 86400000).toISOString(),
@@ -376,7 +446,7 @@ async function fetchGalxe(): Promise<RawCampaign[]> {
           description: c.description ?? "",
           chain: c.chain ?? "multi",
           campaign_status: "active",
-        }) as RawCampaign,
+        }) satisfies RawCampaign,
     );
 }
 
@@ -389,8 +459,8 @@ async function fetchWizzhq(): Promise<RawCampaign[]> {
   return scrapeWizzhq();
 }
 
-async function fetchLayer3Campaigns(): Promise<RawCampaign[]> {
-  return fetchLayer3();
+async function fetchQuestnCampaigns(): Promise<RawCampaign[]> {
+  return fetchQuestn();
 }
 
 async function fetchDeworkCampaigns(): Promise<RawCampaign[]> {
@@ -433,9 +503,8 @@ function computeRawEV(reward_usd: number, entry_count: number): number {
  * entry_density = entries ÷ days_remaining
  * Low density (early) = 100. >200 entries = 20 max. <24h deadline = -20 penalty.
  */
-function computeTimingScore(entry_count: number, deadline: string | null): number {
-  const finalDeadline = deadline ?? new Date(Date.now() + 14 * 86400000).toISOString();
-  const msRemaining = new Date(finalDeadline).getTime() - Date.now();
+function computeTimingScore(entry_count: number, deadline: string): number {
+  const msRemaining = new Date(deadline).getTime() - Date.now();
   const daysRemaining = Math.max(0.1, msRemaining / (1000 * 60 * 60 * 24));
   const density = entry_count / daysRemaining;
 
@@ -525,14 +594,14 @@ export async function runAggregator(): Promise<{
   console.log("[aggregator] Starting run at", new Date().toISOString());
 
   // 1. Fetch from all sources in parallel
-  const [superteam, galxe, wizzhq, layer3, dework] = await Promise.all([
+  const [superteam, galxe, wizzhq, questn, dework] = await Promise.all([
     fetchSuperteam(),
     fetchGalxe(),
     fetchWizzhq(),
-    fetchLayer3Campaigns(),
+    fetchQuestnCampaigns(),
     fetchDeworkCampaigns(),
   ]);
-  const all = [...superteam, ...galxe, ...wizzhq, ...layer3, ...dework];
+  const all = [...superteam, ...galxe, ...wizzhq, ...questn, ...dework];
   console.log(`[aggregator] Fetched ${all.length} raw campaigns`);
 
   // 2. Deduplicate against existing source_urls
@@ -552,10 +621,9 @@ export async function runAggregator(): Promise<{
   for (const campaign of newCampaigns) {
     // Use avg_prize from scraper when available (prize distribution known),
     // otherwise fall back to the standard EV estimate
-    const c = campaign;
     const rawEV =
-      c.avg_prize != null
-        ? c.avg_prize
+      campaign.avg_prize != null
+        ? campaign.avg_prize
         : computeRawEV(campaign.reward_usd, campaign.entry_count);
 
     const [reward_score, timing_score, effort_result, founder_result] =
@@ -597,7 +665,7 @@ export async function runAggregator(): Promise<{
       protocol_name_raw: campaign.protocol_name,
       type: campaign.type,
       reward_usd: campaign.reward_usd,
-      reward_token: c.reward_token ?? "USDC",
+      reward_token: campaign.reward_token ?? "USDC",
       entry_count: campaign.entry_count,
       deadline: campaign.deadline,
       source_url: campaign.source_url,
@@ -614,11 +682,11 @@ export async function runAggregator(): Promise<{
       // Final
       score,
       status,
-      // New fields from scraper
-      campaign_status: c.campaign_status ?? "active",
-      prize_distribution: c.prize_distribution ?? null,
-      winner_count: c.winner_count ?? null,
-      skills_required: c.skills_required ?? [],
+      // Extended fields — fully typed on RawCampaign now
+      campaign_status: campaign.campaign_status ?? "active",
+      prize_distribution: campaign.prize_distribution ?? null,
+      winner_count: campaign.winner_count ?? null,
+      skills_required: campaign.skills_required ?? [],
       // Flags for admin UI
       needs_founder_review: trust_score === null,
       score_overridden: false,

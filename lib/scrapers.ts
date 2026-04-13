@@ -200,28 +200,52 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
         if (!detailRes.ok) throw new Error(`HTTP ${detailRes.status}`);
         const rawHtml = await detailRes.text();
 
+      // ── Reward extraction ────────────────────────────────────────────
+        // Try the detail page HTML first; raw HTML is searched BEFORE tag-stripping
+        // so token symbols in data-attributes and aria labels are captured too.
+
+        // Pattern 1: explicit prize pool line  e.g. "Total Prize Pool 2,500 USDC"
+        const poolMatch = rawHtml.match(
+          /(?:total\s+)?prize\s+pool[^\d]{0,60}?([\d,]+(?:\.\d+)?)\s*(USDC|USDT|SOL|ETH|BNB|MATIC|OP|ARB|APT|SUI)/i,
+        );
+        // Pattern 2: amount followed by token  e.g. "2 500 USDC" / "$1,000 USDT"
+        const amountTokenMatch = rawHtml.match(
+          /\$?([\d,]+(?:\.\d+)?)\s*(USDC|USDT|SOL|ETH|BNB|MATIC|OP|ARB|APT|SUI)(?![a-zA-Z])/i,
+        );
+        // Pattern 3: token then amount  e.g. "USDC 1000 reward"
+        const tokenAmountMatch = rawHtml.match(
+          /\b(USDC|USDT|SOL|ETH|BNB|MATIC|OP|ARB|APT|SUI)\s*([\d,]+(?:\.\d+)?)/i,
+        );
+
+        if (poolMatch) {
+          rewardToken = poolMatch[2].toUpperCase();
+          rewardUsd = parseReward(poolMatch[1]);
+        } else if (amountTokenMatch) {
+          rewardToken = amountTokenMatch[2].toUpperCase();
+          rewardUsd = parseReward(amountTokenMatch[1]);
+        } else if (tokenAmountMatch) {
+          rewardToken = tokenAmountMatch[1].toUpperCase();
+          rewardUsd = parseReward(tokenAmountMatch[2]);
+        } else {
+          // Fallback: parse the reward string scraped from the listing card
+          const cardRewardMatch = card.reward.match(
+            /\$?([\d,]+(?:\.\d+)?)\s*(USDC|USDT|SOL|ETH|BNB|MATIC|OP|ARB)?/i,
+          );
+          if (cardRewardMatch) {
+            rewardUsd = parseReward(cardRewardMatch[1]);
+            if (cardRewardMatch[2]) rewardToken = cardRewardMatch[2].toUpperCase();
+            // rewardToken remains "USDC" if no token symbol found — safe default
+          }
+        }
+
+        // ── Campaign status ──────────────────────────────────────────────
+        // Check card-level deadline text first (fast); then full page body.
         const bodyText = rawHtml
           .replace(/<script[\s\S]*?<\/script>/gi, "")
           .replace(/<style[\s\S]*?<\/style>/gi, "")
           .replace(/<[^>]+>/g, " ")
           .replace(/\s+/g, " ")
           .trim();
-
-        const poolMatch = bodyText.match(
-          /Total Prize Pool[\s\S]{0,60}?([\d,]+(?:\.\d+)?)\s*(USDC|USDT|SOL|ETH|BNB|MATIC)/i,
-        );
-        if (poolMatch) {
-          rewardToken = poolMatch[2].toUpperCase();
-          rewardUsd = parseReward(poolMatch[1]);
-        } else {
-          const tokenMatch = bodyText.match(
-            /([\d,]+(?:\.\d+)?)\s*(USDC|USDT|SOL|ETH)/i,
-          );
-          if (tokenMatch) {
-            rewardToken = tokenMatch[2].toUpperCase();
-            rewardUsd = parseReward(tokenMatch[1]);
-          }
-        }
 
         if (
           card.deadline.toLowerCase().includes("in review") ||
@@ -230,11 +254,13 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
           campaignStatus = "in_review";
         } else if (
           bodyText.toLowerCase().includes("ended") ||
-          bodyText.toLowerCase().includes("closed")
+          bodyText.toLowerCase().includes("closed") ||
+          bodyText.toLowerCase().includes("winner announced")
         ) {
           campaignStatus = "ended";
         }
 
+        // ── Prize distribution ───────────────────────────────────────────
         const prizeSection = bodyText.match(
           /Prize Distribution([\s\S]{0,2000}?)(?:Short Description|Deliverables|Required Skills|Contact|$)/i,
         );
@@ -251,6 +277,7 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
           winnerCount = prizeDistribution.length;
         }
 
+        // ── Skills ───────────────────────────────────────────────────────
         const skillsMatch = bodyText.match(
           /Required Skills?\s*\n?([\s\S]{0,200}?)(?:\n{2}|Contact|Deliverables|$)/i,
         );
@@ -262,6 +289,13 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
         }
       } catch (err) {
         console.error(`[wizzhq] Detail fetch failed for ${sourceUrl}:`, err);
+      }
+
+      // ── Skip ended campaigns ──────────────────────────────────────────
+      // Don't insert ended bounties — they clutter the feed and have stale data.
+      if (campaignStatus === "ended") {
+        console.log(`[wizzhq] Skipping ended campaign: "${card.title}"`);
+        continue;
       }
 
       const rawEntries = parseInt(card.entries.replace(/[^0-9]/g, "")) || 0;
@@ -288,7 +322,7 @@ export async function scrapeWizzhq(): Promise<RawCampaign[]> {
         winner_count: winnerCount || undefined,
         skills_required: skillsRequired,
         avg_prize: avgPrize,
-      } as RawCampaign);
+      } satisfies RawCampaign);
     }
   } catch (err) {
     console.error("[wizzhq] Scrape failed:", err);
