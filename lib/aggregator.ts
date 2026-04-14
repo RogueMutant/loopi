@@ -316,6 +316,9 @@ function mapSuperteamListings(bounties: unknown[]): RawCampaign[] {
 }
 
 // ─── Types for Galxe GraphQL response ────────────────────────────────────────
+// NOTE: participantCount was removed from Galxe's Campaign type (schema update
+// April 2026). Querying it causes a GRAPHQL_VALIDATION_FAILED error that aborts
+// the whole request. Removed until Galxe exposes a public participant count field.
 
 interface GalxeSpace {
   name?: string;
@@ -329,7 +332,6 @@ interface GalxeListItem {
   endTime?: number;
   description?: string;
   chain?: string;
-  participantCount?: number;
   space?: GalxeSpace;
 }
 interface GalxeResponse {
@@ -338,12 +340,9 @@ interface GalxeResponse {
 }
 
 async function fetchGalxe(): Promise<RawCampaign[]> {
-  // Galxe rebranded and updated their API. Current endpoint as of April 2026:
-  // https://graphigo.prd.galaxy.eco/query (same host, updated query schema)
-  // If this 404s again, try: https://api.galxe.com/query
-  // The campaigns() query now uses a different input shape.
-  // claimedTimes requires an address argument — removed to avoid schema error.
-  // participantCount is a plain integer field available without args.
+  // Confirmed working endpoint as of April 2026: graphigo.prd.galaxy.eco/query
+  // api.galxe.com/query now returns 404 — removed from candidates.
+  // participantCount removed from query — field no longer exists in schema.
   const query = `
     query CampaignList {
       campaigns(
@@ -364,17 +363,15 @@ async function fetchGalxe(): Promise<RawCampaign[]> {
           endTime
           description
           chain
-          participantCount
         }
         pageInfo { endCursor hasNextPage }
       }
     }
   `;
 
-  // Try the primary endpoint first, fall back to alternate
+  // Only graphigo.prd.galaxy.eco is alive — api.galxe.com 404s as of April 2026.
   const ENDPOINTS = [
     "https://graphigo.prd.galaxy.eco/query",
-    "https://api.galxe.com/query",
   ];
 
   let json: GalxeResponse | null = null;
@@ -436,7 +433,7 @@ async function fetchGalxe(): Promise<RawCampaign[]> {
           type: "infofi" as CampaignType,
           reward_usd: 0,
           reward_token: "POINTS",
-          entry_count: safeEntryCount(c.participantCount ?? 0),
+          entry_count: 0, // participantCount removed from Galxe schema April 2026
           deadline: c.endTime
             ? new Date(c.endTime * 1000).toISOString()
             : new Date(Date.now() + 14 * 86400000).toISOString(),

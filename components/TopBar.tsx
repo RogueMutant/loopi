@@ -14,7 +14,7 @@ const TABS = [
   { label: "Feed", href: "/feed" },
   { label: "Dashboard", href: "/dashboard" },
   { label: "Squad", href: "/squad" },
-  { label: "Pre-market", href: "/pre-market" },
+  { label: "Pre-market", href: "/premarket" },
 ];
 
 export function TopBar() {
@@ -33,12 +33,14 @@ export function TopBar() {
         border-b-[0.5px] border-[#21262D] flex items-center px-5"
     >
       {/* Wordmark — visible on mobile when sidebar is collapsed */}
-      <span
-        className="md:hidden text-[18px] font-semibold text-[#00D282] mr-4"
-        style={{ fontFamily: "var(--font-space-grotesk)" }}
-      >
-        Loopi
-      </span>
+      <Link href="/feed">
+        <span
+          className="md:hidden text-[18px] font-semibold text-[#00D282] mr-4"
+          style={{ fontFamily: "var(--font-space-grotesk)" }}
+        >
+          Loopi
+        </span>
+      </Link>
 
       {/* Tab links */}
       <nav className="hidden md:flex items-center gap-8 flex-1">

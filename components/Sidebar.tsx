@@ -20,7 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Feed", href: "/feed", icon: <LayoutGrid size={18} /> },
   { label: "Dashboard", href: "/dashboard", icon: <Grid2X2 size={18} /> },
   { label: "Squad", href: "/squad", icon: <Users size={18} /> },
-  { label: "Pre-market", href: "/pre-market", icon: <Timer size={18} /> },
+  { label: "Pre-market", href: "/premarket", icon: <Timer size={18} /> },
 ];
 
 export function Sidebar() {
@@ -72,7 +72,9 @@ export function Sidebar() {
                   }`}
                 style={{ fontFamily: "var(--font-geist)" }}
               >
-                <span className={isActive ? "text-[#00D282]" : "text-[#7D8590]"}>
+                <span
+                  className={isActive ? "text-[#00D282]" : "text-[#7D8590]"}
+                >
                   {item.icon}
                 </span>
                 {item.label}
@@ -83,9 +85,7 @@ export function Sidebar() {
 
         {/* Market Status widget */}
         <div className="px-4 pb-4">
-          <div
-            className="bg-[#0D1117] border-[0.5px] border-[#21262D] rounded-[10px] p-3"
-          >
+          <div className="bg-[#0D1117] border-[0.5px] border-[#21262D] rounded-[10px] p-3">
             <p
               className="text-[11px] uppercase tracking-[0.08em] text-[#7D8590] mb-2"
               style={{ fontFamily: "var(--font-geist)" }}

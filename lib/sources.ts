@@ -120,13 +120,17 @@ export async function fetchQuestn(): Promise<RawCampaign[]> {
 
     const json = await res.json();
 
-    // Non-zero code means API error
-    if (json.code !== 0 && json.code !== 200) {
+    // Extract the list regardless of envelope shape.
+    // Questn changed their response structure — json.code may be undefined now.
+    // Only abort if code is an explicit numeric error AND no list data is present.
+    const list: QuestnItem[] = json.data?.list ?? json.list ?? json.items ?? [];
+    const codeIsError =
+      typeof json.code === "number" && json.code !== 0 && json.code !== 200;
+
+    if (list.length === 0 && codeIsError) {
       console.error("[questn] API returned error code:", json.code, json.message ?? "");
       break;
     }
-
-    const list: QuestnItem[] = json.data?.list ?? json.list ?? [];
     if (list.length === 0) break;
 
     for (const quest of list) {
@@ -164,15 +168,15 @@ export async function fetchQuestn(): Promise<RawCampaign[]> {
 
 // ─── Dework ───────────────────────────────────────────────────────────────────
 //
-// Previous query had `assigneeIds: []` in the filter — not a valid Dework field.
-// Simplified to use only supported filter args: statuses.
-// Also removed the `pagination` input wrapper — Dework uses flat limit/offset args.
+// Dework renamed their root GraphQL query field:
+//   tasks(...)  ->  getTasks(...)  (verified from 400 error, April 2026)
+// All other args (filter, sorting, limit, offset) remain the same.
 
 const DEWORK_API = "https://api.dework.xyz/graphql";
 
 const DEWORK_QUERY = `
   query OpenTasks($limit: Float!, $offset: Float!) {
-    tasks(
+    getTasks(
       filter: { statuses: [OPEN] }
       sorting: { field: createdAt, direction: DESC }
       limit: $limit
@@ -237,7 +241,8 @@ export async function fetchDework(): Promise<RawCampaign[]> {
       break;
     }
 
-    const tasks: DeworkTask[] = data?.tasks ?? [];
+    // getTasks is the current root field (renamed from tasks April 2026)
+    const tasks: DeworkTask[] = data?.getTasks ?? data?.tasks ?? [];
     if (tasks.length === 0) break;
 
     for (const task of tasks) {
